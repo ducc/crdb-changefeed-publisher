@@ -104,7 +104,6 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-
 async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
     let query = {
         let cursor_result = cursor_store.get();
