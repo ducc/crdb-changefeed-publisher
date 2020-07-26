@@ -3,6 +3,32 @@ use crate::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+pub enum QueueType {
+    RabbitMQ,
+}
+
+impl QueueType {
+    pub fn from_name(name: &str) -> Option<QueueType> {
+        match name {
+            "rabbitmq" => Some(QueueType::RabbitMQ),
+            _ => None,
+        }
+    }
+}
+
+pub enum CursorStoreType {
+    CockroachDB,
+}
+
+impl CursorStoreType {
+    pub fn from_name(name: &str) -> Option<CursorStoreType> {
+        match name {
+            "cockroachdb" => Some(CursorStoreType::CockroachDB),
+            _ => None,
+        }
+    }
+}
+
 pub struct ChangeRow {
     pub table: String,
     pub key: String,

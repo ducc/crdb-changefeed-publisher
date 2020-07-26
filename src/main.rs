@@ -8,7 +8,7 @@ mod cursors;
 mod queues;
 
 use error::Error;
-use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change};
+use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change, QueueType, CursorStoreType};
 use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
 use cursors::{init_crdb_cursor_store, CursorStore, CrdbCursorStore};
 use queues::{MessageQueue, RabbitMQ, init_rabbitmq_channel};
@@ -18,7 +18,7 @@ use lapin::{
     Connection, 
     ConnectionProperties,
 };
-use tracing::{trace, debug, info, error};
+use tracing::{trace, debug, error};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use std::{
     string::String, 
@@ -28,6 +28,7 @@ use sqlx::{
     postgres::PgPool,
     prelude::*,
 };
+use clap::{Arg, App};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -45,39 +46,59 @@ async fn main() -> Result<(), Error> {
 
     env_logger::init();
 
-    // get the prometheus server address
+    let matches = App::new("crdb-changefeed-publisher")
+        .arg(Arg::with_name("queue")
+            .long("queue")
+            .takes_value(true)
+            .help("aaaaa"))
+        .arg(Arg::with_name("cursor-store")
+            .long("cursor-store")
+            .takes_value(true)
+            .help("bbbbbbb"))
+        .arg(Arg::with_name("cursor-frequency")
+            .long("cursor-frequency")
+            .takes_value(true)
+            .help("ccccccc"))
+        .get_matches();
+
+    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq"))?;
+    let cursor_store_value = CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb"))?;
+    let cursor_frequency_value = matches.value_of("cursor-frequency").unwrap_or("10s");
+
+    // get the environment variables
     let prom_addr_raw = std::env::var("PROMETHEUS_ADDR").unwrap_or_else(|_| "0.0.0.0:8001".into());
-    let prom_addr: SocketAddr = prom_addr_raw.parse().expect("cannot parse prometheus address");
+    let database_url = std::env::var("DATABASE_URL").expect("database url is required");
 
     // start the prometheus server
+    let prom_addr: SocketAddr = prom_addr_raw.parse().expect("cannot parse prometheus address");
     let warp_handle = tokio::spawn(run_warp(prom_addr));
 
-    // get the rabbitmq address
-    let mq_addr = std::env::var("AMQP_ADDR").unwrap_or_else(|_| "amqp://127.0.0.1:5672/%2f".into());
-    info!(address = &mq_addr[..], "connecting to rabbitmq");
-
-    // get the queue name
-    let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
-
-    // connect to rabbitmq
-    let mq_conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
-    let mq_chan = mq_conn.create_channel().await?;
-    let message_queue = Box::new(RabbitMQ::new(mq_chan, queue_name));
-    let _ = init_rabbitmq_channel(&message_queue).await?;
+    let message_queue: Box<dyn MessageQueue + Send> = match queue_value {
+        QueueType::RabbitMQ => {
+            let mq_addr = std::env::var("AMQP_ADDR").expect("amqp addr is required");
+            let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
+            let mq_conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
+            let mq_chan = mq_conn.create_channel().await?;
+            let message_queue = Box::new(RabbitMQ::new(mq_chan, queue_name));
+            let _ = init_rabbitmq_channel(&message_queue).await?;
+            message_queue
+        },
+    };
 
     // connect to cockroachdb
     let pool = PgPool::builder()
         .max_size(5)
-        .build(&std::env::var("DATABASE_URL")?).await?;
+        .build(&database_url).await?;
 
-    if let Err(e) = init_crdb_cursor_store(&pool).await {
-        error!("init_crdb_cursor_store: {:?}", e);
-        return Ok(());
-    }
-    
-    let cursor_store = Box::new(CrdbCursorStore::new(pool.clone()));
+    let cursor_store: Box<dyn CursorStore + Send> = match cursor_store_value {
+        CursorStoreType::CockroachDB => {
+            let _ = init_crdb_cursor_store(&pool).await?;
+            Box::new(CrdbCursorStore::new(pool.clone()))
+        },
+    };
 
-    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store));
+    // begin processing cockroachdb changefeeds
+    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store, cursor_frequency_value.to_owned()));
 
     tokio::select! {
         cf_result = cf_handle => {
@@ -104,7 +125,7 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
+async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, cursor_frequency_value: String) -> Result<(), Error> {
     let query = {
         let cursor_result = cursor_store.get();
 
@@ -117,9 +138,9 @@ async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + 
         };
 
         if let Some(cursor) = cursor_opt {
-            format!("EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '10s', cursor = '{}';", cursor)
+            format!("EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '{}', cursor = '{}';", cursor_frequency_value, cursor)
         } else {
-            "EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '10s';".to_owned()
+            format!("EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '{}';", cursor_frequency_value)
         }
     };
     debug!("query: {}", &query);
