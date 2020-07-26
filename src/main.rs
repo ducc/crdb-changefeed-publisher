@@ -2,53 +2,32 @@
 #![feature(try_trait)]
 
 mod error;
+mod model;
+mod metrics;
+mod cursors;
+mod queues;
 
 use error::Error;
+use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change};
+use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
+use cursors::{init_crdb_cursor_store, CursorStore, CrdbCursorStore};
+use queues::{MessageQueue, RabbitMQ, init_rabbitmq_channel};
 
 use tokio_amqp::*;
 use lapin::{
     Connection, 
-    ConnectionProperties, 
-    options::{
-        QueueDeclareOptions,
-        BasicPublishOptions,
-    }, 
-    types::FieldTable,
-    Channel,
-    BasicProperties,
+    ConnectionProperties,
 };
 use tracing::{trace, debug, info, error};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use std::{
-    str::from_utf8,
+    string::String, 
     net::SocketAddr,
-    convert::Infallible,
-    vec::Vec,
-    string::String,
 };
-use prometheus::{self, IntCounter, register_int_counter, TextEncoder, Encoder};
-use lazy_static::lazy_static;
-use warp::Filter;
 use sqlx::{
     postgres::PgPool,
     prelude::*,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
-use async_trait::async_trait;
-
-// initialize the prometheus metrics
-lazy_static! {
-    static ref MESSAGES_RECEIVED_COUNTER: IntCounter = register_int_counter!(
-        "rabbitmq_messages_received", 
-        "Number of messages received from RabbitMQ"
-    ).unwrap();
-
-    static ref MESSAGES_ACKED_COUNTER: IntCounter = register_int_counter!(
-        "rabbitmq_messages_acked", 
-        "Number of messages acked from RabbitMQ"
-    ).unwrap();
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -82,17 +61,11 @@ async fn main() -> Result<(), Error> {
 
     // connect to rabbitmq
     let mq_conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
-
     let mq_chan = mq_conn.create_channel().await?;
+    let message_queue = Box::new(RabbitMQ::new(mq_chan, queue_name));
+    let _ = init_rabbitmq_channel(&message_queue).await?;
 
-    let mq_declare_chan = mq_conn.create_channel().await?;
-    let _queue = mq_declare_chan.queue_declare(
-        &queue_name,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    )
-    .await?;
-
+    // connect to cockroachdb
     let pool = PgPool::builder()
         .max_size(5)
         .build(&std::env::var("DATABASE_URL")?).await?;
@@ -101,113 +74,38 @@ async fn main() -> Result<(), Error> {
         error!("init_crdb_cursor_store: {:?}", e);
         return Ok(());
     }
-
-    //let cursor_store = Box::new(NoopCursorStore{});
+    
     let cursor_store = Box::new(CrdbCursorStore::new(pool.clone()));
 
-    let cf_handle = tokio::spawn(process_changefeed(pool, mq_chan, queue_name, cursor_store));
+    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store));
 
-    // start our rabbitmq consumer and the prometheus exporter
-    match tokio::try_join!(cf_handle, warp_handle) {
-        Ok((cf_result, warp_result)) => {
-            info!("cf result: {:?}", cf_result);
-            info!("warp result: {:?}", warp_result);
-        },
-        Err(e) => {
-            error!("err on join: {}", e);
-        },
-    }
+    tokio::select! {
+        cf_result = cf_handle => {
+            match cf_result {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("finished processing changefeeds: {:?}", e);
+                    return Ok(());
+                },
+            };
+        }
+
+        warp_result = warp_handle => {
+            match warp_result {
+                Ok(_) => (),
+                Err(e) => {
+                    error!("finished processing prom requests: {:?}", e);
+                    return Ok(());
+                },
+            };
+        }
+    };
 
     Ok(())
 }
 
-async fn run_warp(prom_addr: SocketAddr) -> Result<(), Error> {
-    let exporter = warp::path!("metrics").and_then(serve_metrics);
-    warp::serve(exporter).run(prom_addr).await;
-    Ok(())
-}
 
-async fn serve_metrics() -> Result<impl warp::Reply, Infallible> {
-    let encoder = TextEncoder::new();
-    let mut buf = Vec::new();
-    let metric_families = prometheus::gather();
-    encoder.encode(&metric_families, &mut buf).expect("encoding prometheus metrics as text");
-    let text = from_utf8(&buf).expect("converting bytes to utf8");
-    Ok(text.to_owned())
-}
-
-#[async_trait]
-trait CursorStore {
-    async fn get(&self) -> Result<Option<String>, Error>;
-    async fn set(&self, cursor: String) -> Result<(), Error>;
-}
-
-struct NoopCursorStore;
-
-#[async_trait]
-impl CursorStore for NoopCursorStore {
-    async fn get(&self) -> Result<Option<String>, Error> {
-        Ok(None)
-    }
-
-    async fn set(&self, _cursor: String) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
-struct CrdbCursorStore {
-    pool: PgPool,
-}
-
-impl CrdbCursorStore {
-    fn new(pool: PgPool) -> Self {
-        Self {
-            pool: pool,
-        }
-    }
-}
- 
-#[async_trait]
-impl CursorStore for CrdbCursorStore {
-    async fn get(&self) -> Result<Option<String>, Error> {
-        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = 'key';");
-        let mut fetched = query.fetch(&self.pool); 
-        
-        let row = match fetched.next().await {
-            Ok(v) => v,
-            Err(e) => return Err(Error::SqlxError(e)),
-        };
-
-        match row {
-            Some(v) => {
-                let s: String = v.get(0);
-                Ok(Some(s))
-            },
-            None => Ok(None),
-        }
-    }
-
-    async fn set(&self, cursor: String) -> Result<(), Error> {
-        let result = sqlx::query(&format!("UPSERT INTO cursor_store (key, cursor) VALUES ('key', '{}');", cursor))
-            .execute(&self.pool)
-            .await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Error::SqlxError(e))
-        }
-    }
-}
-
-async fn init_crdb_cursor_store(pool: &PgPool) -> Result<(), Error> {
-    let result = sqlx::query("CREATE TABLE IF NOT EXISTS cursor_store (key STRING NOT NULL PRIMARY KEY, cursor STRING NOT NULL);").execute(pool).await;
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(Error::SqlxError(e)),
-    }
-}
-
-async fn process_changefeed(pool: PgPool, mq_chan: Channel, queue_name: String, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
+async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
     let query = {
         let cursor_result = cursor_store.get();
 
@@ -242,13 +140,10 @@ async fn process_changefeed(pool: PgPool, mq_chan: Channel, queue_name: String, 
                 let payload = serde_json::to_string(&payload)?;
                 trace!("{}", &payload);
 
-                let _ = mq_chan.basic_publish(
-                    "",
-                    &queue_name,
-                    BasicPublishOptions::default(),
-                    payload.into_bytes(),
-                    BasicProperties::default(),
-                ).await?.await?;
+                let publish_handle = message_queue.publish(payload.into_bytes());
+                if let Err(e) = publish_handle.await {
+                    error!("unable to publish message: {:?}", e);
+                };
             },
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
@@ -266,22 +161,6 @@ async fn process_changefeed(pool: PgPool, mq_chan: Channel, queue_name: String, 
     Ok(())
 }
 
-struct Change<'a> {
-    table: Option<&'a str>,
-    key: Option<Vec<u8>>,
-    value: Option<Vec<u8>>,
-}
-
-impl<'a> Change<'a> {
-    fn new(table: Option<&'a str>, key: Option<Vec<u8>>, value: Option<Vec<u8>>) -> Self {
-        Self {
-            table: table,
-            key: key,
-            value: value,
-        }
-    }
-}
-
 fn process_change(change: Change) -> Result<ProcessedChange, Error> {
     let value = String::from_utf8(change.value?)?;
 
@@ -295,56 +174,3 @@ fn process_change(change: Change) -> Result<ProcessedChange, Error> {
     Ok(ProcessedChange::Row(ChangeRow::new(table, key, value)))
 }
 
-struct ChangeRow {
-    table: String,
-    key: String,
-    value: String,
-}
-
-impl ChangeRow {
-    fn new(table: String, key: String, value: String) -> Self {
-        Self {
-            table: table,
-            key: key,
-            value: value,
-        }
-    }
-}
-
-struct ChangeCursor {
-    cursor: String,
-}
-
-impl ChangeCursor {
-    fn new(cursor: String) -> Self {
-        Self { cursor: cursor, }
-    }
-}
-
-enum ProcessedChange {
-    Row(ChangeRow),
-    Cursor(ChangeCursor),
-}
-
-#[derive(Deserialize)]
-struct JsonCursor {
-    resolved: String,
-} 
-
-#[derive(Serialize)]
-struct ChangePayload {
-    table: String,
-    key: String,
-    value: Box<RawValue>,
-}
-
-impl ChangePayload {
-    fn new(table: String, key: String, value: String) -> Result<Self, Error> {
-        let value = RawValue::from_string(value)?;
-        Ok(Self {
-            table: table,
-            key: key,
-            value: value,
-        })
-    }
-}

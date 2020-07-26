@@ -308,7 +308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a71ab494c0b5b860bdc8407ae08978052417070c2ced38573a9157ad75b8ac"
 
 [[package]]
-name = "crdb-changefeed-processor"
+name = "crdb-changefeed-publisher"
 version = "0.1.0"
 dependencies = [
  "async-trait",
