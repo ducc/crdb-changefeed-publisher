@@ -5,14 +5,10 @@ Reads changefeeds from CockroachDB then sends them to a message queue!
 This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/change-data-capture.html) "which stream row-level changes to the client indefinitely until the underlying connection is closed or the changefeed is canceled".
 
 ## Supported messages queues
-| Queue    | Publishing changes | Argument         |
-| -------- | ------------------ | ---------------- |
-| RabbitMQ | Yes                | --queue=rabbitmq |
+- RabbitMQ
 
 ## Supported cursor stores
-| Store       | Saving cursors | Argument                    |
-| ----------- | -------------- | --------------------------- |
-| CockroachDB | Yes            |  --cursor-store=cockroachdb |
+- CockroachDB
 
 ## How does it work?
 1. The cursor store is read to check if a cursor is already stored.
@@ -33,28 +29,19 @@ This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/c
 ...
 
 ## Usage
-```
-crdb-changefeed-publisher 0.1.0
-Joe Burnard <github.com/ducc>
-Reads changefeeds from CockroachDB then sends them to a message queue.
+### Command line arguments
+| Argument           | Help                                     | Options           | Default     |
+| ------------------ | ---------------------------------------- | ----------------- | ----------- |
+| --help             | Shows available arguments                |                   |             |
+| --version          | Shows the running version                |                   |             |
+| --queue            | The message queue to send row changes to | rabbitmq          | rabbitmq    |
+| --cursor-store     | Where cursor values should be stored     | cockroachdb       | cockroachdb |
+| --cursor-frequency | How often cursors should be received     | Duration e.g. 10s | 10s         |
 
-USAGE:
-    crdb-changefeed-publisher [OPTIONS]
-
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-
-OPTIONS:
-        --cursor-frequency <cursor-frequency>
-            How often cursors should be received from cockroachdb and saved in the cursor store (e.g. 10s).
-
-        --cursor-store <cursor-store>            Where cursor values should be stored (cockroachdb).
-        --queue <queue>                          The message queue to send row changes to (rabbitmq).
-```
-
-## Environment Variables
-...
+### Environment variables
+| Variable | Help | Default |
+| -------- | ---- | ------- |
+| A        | A    | A       |
 
 ## Metrics
 ...
