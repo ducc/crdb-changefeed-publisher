@@ -1,0 +1,17 @@
+name: crdb-changefeed-publisher
+version: "0.1.0"
+author: Joe Burnard <github.com/ducc>
+about: Reads changefeeds from CockroachDB then sends them to a message queue.
+args:
+  - queue:
+      long: queue
+      takes_value: true
+      help: The message queue to send row changes to (rabbitmq).
+  - cursor-store:
+      long: cursor-store
+      takes_value: true
+      help: Where cursor values should be stored (cockroachdb).
+  - cursor-frequency:
+      long: cursor-frequency
+      takes_value: true
+      help: How often cursors should be received from cockroachdb and saved in the cursor store (e.g. 10s).

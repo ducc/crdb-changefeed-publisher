@@ -28,7 +28,7 @@ use sqlx::{
     postgres::PgPool,
     prelude::*,
 };
-use clap::{Arg, App};
+use clap::{load_yaml, App};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -46,23 +46,11 @@ async fn main() -> Result<(), Error> {
 
     env_logger::init();
 
-    let matches = App::new("crdb-changefeed-publisher")
-        .arg(Arg::with_name("queue")
-            .long("queue")
-            .takes_value(true)
-            .help("aaaaa"))
-        .arg(Arg::with_name("cursor-store")
-            .long("cursor-store")
-            .takes_value(true)
-            .help("bbbbbbb"))
-        .arg(Arg::with_name("cursor-frequency")
-            .long("cursor-frequency")
-            .takes_value(true)
-            .help("ccccccc"))
-        .get_matches();
+    let yaml = load_yaml!("../cli.yml");
+    let matches = App::from_yaml(yaml).get_matches();
 
-    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq"))?;
-    let cursor_store_value = CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb"))?;
+    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq")).expect("unable to get queue type");
+    let cursor_store_value = CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb")).expect("unable to get cursor store type");
     let cursor_frequency_value = matches.value_of("cursor-frequency").unwrap_or("10s");
 
     // get the environment variables
