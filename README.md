@@ -41,10 +41,10 @@ Published message:
 Tested on Rust version `1.46.0-nightly (346aec9b0 2020-07-11)`.
 
 ### Docker
-..
+`docker run duccos/crdb-changefeed-publisher:latest`
 
 ### Kubernetes
-..
+Example deployments can be found in the [.kube directory](https://github.com/ducc/crdb-changefeed-publisher/tree/master/.kube).
 
 ### From source
 1. `git clone git@github.com:ducc/crdb-changefeed-publisher.git`
