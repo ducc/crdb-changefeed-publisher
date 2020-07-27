@@ -1,5 +1,5 @@
 # CockroachDB Changefeed Publisher
-Reads changefeeds from CockroachDB then sends them to a message queue!
+Reads row-level changes from CockroachDB then sends them to a message queue!
 
 ## What is a changefeed?
 This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/change-data-capture.html) "which stream row-level changes to the client indefinitely until the underlying connection is closed or the changefeed is canceled".
@@ -25,6 +25,18 @@ This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/c
     1. The `resolved` JSON field is pulled from the `value` response.
     1. This is inserted/updated in the cursor store.
 
+## Example published message
+SQL:
+```sql
+CREATE TABLE foo (a INT PRIMARY KEY, b int);
+INSERT INTO foo VALUES (54);
+```
+
+Published message:
+```json
+{"table":"foo","key":"[54]","value":{"after": {"a": 54, "b": null}}}
+```
+
 ## Install
 Tested on Rust version `1.46.0-nightly (346aec9b0 2020-07-11)`.
 
@@ -42,13 +54,14 @@ Tested on Rust version `1.46.0-nightly (346aec9b0 2020-07-11)`.
 
 ## Usage
 ### Command line arguments
-| Argument           | Help                                     | Options           | Default     |
-| ------------------ | ---------------------------------------- | ----------------- | ----------- |
-| --help             | Shows available arguments                |                   |             |
-| --version          | Shows the running version                |                   |             |
-| --queue            | The message queue to send row changes to | rabbitmq          | rabbitmq    |
-| --cursor-store     | Where cursor values should be stored     | cockroachdb       | cockroachdb |
-| --cursor-frequency | How often cursors should be received     | Duration e.g. 10s | 10s         |
+| Argument           | Help                                     | Options             | Default     |
+| ------------------ | ---------------------------------------- | ------------------- | ----------- |
+| --help             | Shows available arguments                |                     |             |
+| --version          | Shows the running version                |                     |             |
+| --table            | Name of the table to watch changes in    | Table name e.g. foo |             |
+| --queue            | The message queue to send row changes to | rabbitmq            | rabbitmq    |
+| --cursor-store     | Where cursor values should be stored     | cockroachdb         | cockroachdb |
+| --cursor-frequency | How often cursors should be received     | Duration e.g. 10s   | 10s         |
 
 ### Environment variables
 | Variable        | Help                            | Options                                 | Default      |
@@ -68,3 +81,6 @@ Prometheus metrics are exposed on the PROMETHEUS_ADDR env var address at /metric
 ## License
 Licensed under MIT. See the LICENSE file in the repository root for the full text.
 This is a third party application and is not affiliated with CockroachDB. It is not a direct replacement for the Enterprise Changefeeds offering.
+
+## Contributions
+Feel free to submit a merge request! Your changes MUST be submitted under the MIT license.
