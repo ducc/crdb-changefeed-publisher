@@ -26,7 +26,19 @@ This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/c
     1. This is inserted/updated in the cursor store.
 
 ## Install
-...
+Tested on Rust version `1.46.0-nightly (346aec9b0 2020-07-11)`.
+
+### Docker
+..
+
+### Kubernetes
+..
+
+### From source
+1. `git clone git@github.com:ducc/crdb-changefeed-publisher.git`
+1. `cd crdb-changefeed-publisher`
+1. `cargo build --release`
+1. `{environment vars} target/release/crdb-changefeed-publisher`
 
 ## Usage
 ### Command line arguments
@@ -39,12 +51,19 @@ This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/c
 | --cursor-frequency | How often cursors should be received     | Duration e.g. 10s | 10s         |
 
 ### Environment variables
-| Variable | Help | Default |
-| -------- | ---- | ------- |
-| A        | A    | A       |
+| Variable        | Help                            | Options                                 | Default      |
+| --------------- | ------------------------------- | --------------------------------------- | ------------ |
+| RUST_LOG        | Logging level                   | trace, debug, info, error               | info         |
+| PROMETHEUS_ADDR | Adress of the promethues server | ip:port                                 | 0.0.0.0:8001 |
+| DATABASE_URL    | URL of the cockroachdb server   | postgresql://user:pass@ip:port/database |              |
+| AMQP_ADDR       | RabbitMQ server address         | amqp://ip:port                          |              |
+| AMQP_QUEUE      | RabbitMQ queue topic name       | e.g. changes                            |              |
 
 ## Metrics
-...
+Prometheus metrics are exposed on the PROMETHEUS_ADDR env var address at /metrics.
+| Metric                 | Type    |
+| ---------------------- | ------- |
+| rabbitmq_messages_sent | Counter |
 
 ## License
 Licensed under MIT. See the LICENSE file in the repository root for the full text.
