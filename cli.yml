@@ -3,6 +3,10 @@ version: "0.1.0"
 author: Joe Burnard <github.com/ducc>
 about: Reads changefeeds from CockroachDB then sends them to a message queue.
 args:
+  - table:
+      long: table
+      takes_value: true
+      help: Name of the cockroachdb table to watch changes in.
   - queue:
       long: queue
       takes_value: true

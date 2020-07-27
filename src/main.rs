@@ -49,6 +49,7 @@ async fn main() -> Result<(), Error> {
     let yaml = load_yaml!("../cli.yml");
     let matches = App::from_yaml(yaml).get_matches();
 
+    let table_value = matches.value_of("table").expect("unable to get table name");
     let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq")).expect("unable to get queue type");
     let cursor_store_value = CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb")).expect("unable to get cursor store type");
     let cursor_frequency_value = matches.value_of("cursor-frequency").unwrap_or("10s");
@@ -86,7 +87,7 @@ async fn main() -> Result<(), Error> {
     };
 
     // begin processing cockroachdb changefeeds
-    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store, cursor_frequency_value.to_owned()));
+    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store, table_value.to_owned(), cursor_frequency_value.to_owned()));
 
     tokio::select! {
         cf_result = cf_handle => {
@@ -113,7 +114,7 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, cursor_frequency_value: String) -> Result<(), Error> {
+async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, table_name: String, cursor_frequency_value: String) -> Result<(), Error> {
     let query = {
         let cursor_result = cursor_store.get();
 
@@ -126,9 +127,9 @@ async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + 
         };
 
         if let Some(cursor) = cursor_opt {
-            format!("EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '{}', cursor = '{}';", cursor_frequency_value, cursor)
+            format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}', cursor = '{}';", table_name, cursor_frequency_value, cursor)
         } else {
-            format!("EXPERIMENTAL CHANGEFEED FOR foo WITH resolved = '{}';", cursor_frequency_value)
+            format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}';", table_name, cursor_frequency_value)
         }
     };
     debug!("query: {}", &query);
