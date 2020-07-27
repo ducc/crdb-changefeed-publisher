@@ -1,8 +1,18 @@
 # CockroachDB Changefeed Publisher
 Reads changefeeds from CockroachDB then sends them to a message queue!
 
+## Supported messages queues
+| Queue    | Publishing changes | Argument         |
+| -------- | ------------------ | ---------------- |
+| RabbitMQ | Yes                | --queue=rabbitmq |
+
+## Supported cursor stores
+| Store       | Saving cursors | Argument                    |
+| ----------- | -------------- | --------------------------- |
+| CockroachDB | Yes            |  --cursor-store=cockroachdb |
+
 ## What is a changefeed?
-..
+This app utilises [https://www.cockroachlabs.com/docs/stable/change-data-capture.html](Core changefeeds) "which stream row-level changes to the client indefinitely until the underlying connection is closed or the changefeed is canceled".
 
 ## How does it work?
 1. The cursor store is read to check if a cursor is already stored.
