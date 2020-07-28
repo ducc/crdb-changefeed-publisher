@@ -46,7 +46,8 @@ impl CursorStore for CrdbCursorStore {
     }
 
     async fn set(&self, cursor: String) -> Result<(), Error> {
-        let result = sqlx::query(&format!("UPSERT INTO cursor_store (key, cursor) VALUES ('key', '{}');", cursor))
+        let result = sqlx::query(&format!("UPSERT INTO cursor_store (key, cursor) VALUES ('key', $1);"))
+            .bind(cursor)
             .execute(&self.pool)
             .await;
 

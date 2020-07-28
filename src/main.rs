@@ -91,30 +91,32 @@ async fn main() -> Result<(), Error> {
 
     tokio::select! {
         cf_result = cf_handle => {
-            match cf_result {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("finished processing changefeeds: {:?}", e);
-                    return Ok(());
-                },
-            };
+            if let Err(e) = cf_result {
+                panic!(e);
+            }
         }
 
         warp_result = warp_handle => {
-            match warp_result {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("finished processing prom requests: {:?}", e);
-                    return Ok(());
-                },
-            };
+            if let Err(e) = warp_result {
+                panic!(e);
+            }
         }
     };
 
     Ok(())
 }
 
-async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, table_name: String, cursor_frequency_value: String) -> Result<(), Error> {
+fn build_changefeed_query(table_name: String, cursor_frequency_value: String, cursor: Option<String>) -> String {
+    let mut query = format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}'", table_name, cursor_frequency_value);
+    
+    if let Some(cursor) = cursor {
+        query = format!("{}, cursor = '{}'", query, cursor);
+    }
+
+    format!("{}", query)
+} 
+
+async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, table_name: String, cursor_frequency_value: String) {
     let query = {
         let cursor_result = cursor_store.get();
 
@@ -122,18 +124,25 @@ async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + 
             Ok(result) => result,
             Err(e) => {
                 error!("getting cursor result: {:?}", e);
-                return Ok(());
+                return;
             }
         };
 
-        if let Some(cursor) = cursor_opt {
-            format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}', cursor = '{}';", table_name, cursor_frequency_value, cursor)
-        } else {
-            format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}';", table_name, cursor_frequency_value)
-        }
+        build_changefeed_query(table_name, cursor_frequency_value, cursor_opt)
     };
+    
     debug!("query: {}", &query);
 
+
+    match execute_changefeed(query, pool, message_queue, cursor_store).await {
+        Ok(_) => {},
+        Err(e) => {
+            error!("error executing changefeed: {:?}", e);
+        },
+    };
+}
+
+async fn execute_changefeed(query: String, pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
     let mut cursor = sqlx::query(&query).fetch(&pool);
 
     while let Some(row) = cursor.next().await? {
@@ -147,22 +156,17 @@ async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + 
             ProcessedChange::Row(row) => {
                 let payload = ChangePayload::new(row.table, row.key, row.value)?;
                 let payload = serde_json::to_string(&payload)?;
-                trace!("{}", &payload);
+                trace!("change={}", &payload);
 
                 let publish_handle = message_queue.publish(payload.into_bytes());
-                if let Err(e) = publish_handle.await {
-                    error!("unable to publish message: {:?}", e);
-                };
+                publish_handle.await?;
             },
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
                 trace!("cursor={}", &parsed.resolved);
 
-                let cursor_set_handle = cursor_store.set(parsed.resolved);
-                match cursor_set_handle.await {
-                    Ok(_) => {},
-                    Err(e) => error!("setting cursor handle: {:?}", e),
-                };
+                let cursor_handle = cursor_store.set(parsed.resolved);
+                cursor_handle.await?;
             },
         }
     }
