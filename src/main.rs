@@ -10,8 +10,8 @@ mod queues;
 use error::Error;
 use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change, QueueType, CursorStoreType};
 use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
-use cursors::{init_crdb_cursor_store, CursorStore, CrdbCursorStore};
-use queues::{MessageQueue, RabbitMQ, init_rabbitmq_channel};
+use cursors::{init_crdb_cursor_store, CrdbCursorStore};
+use queues::{RabbitMQ, init_rabbitmq_channel};
 
 use tokio_amqp::*;
 use lapin::{
@@ -23,12 +23,17 @@ use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use std::{
     string::String, 
     net::SocketAddr,
+    sync::Arc,
 };
 use sqlx::{
     postgres::PgPool,
     prelude::*,
 };
 use clap::{load_yaml, App};
+use regex::Regex;
+
+type MessageQueue = Arc<dyn queues::MessageQueue + Send + Sync>;
+type CursorStore = Arc<dyn cursors::CursorStore + Send + Sync>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -62,13 +67,13 @@ async fn main() -> Result<(), Error> {
     let prom_addr: SocketAddr = prom_addr_raw.parse().expect("cannot parse prometheus address");
     let warp_handle = tokio::spawn(run_warp(prom_addr));
 
-    let message_queue: Box<dyn MessageQueue + Send> = match queue_value {
+    let message_queue: MessageQueue = match queue_value {
         QueueType::RabbitMQ => {
             let mq_addr = std::env::var("AMQP_ADDR").expect("amqp addr is required");
             let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
             let mq_conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
             let mq_chan = mq_conn.create_channel().await?;
-            let message_queue = Box::new(RabbitMQ::new(mq_chan, queue_name));
+            let message_queue = Arc::new(RabbitMQ::new(mq_chan, queue_name));
             let _ = init_rabbitmq_channel(&message_queue).await?;
             message_queue
         },
@@ -79,10 +84,10 @@ async fn main() -> Result<(), Error> {
         .max_size(5)
         .build(&database_url).await?;
 
-    let cursor_store: Box<dyn CursorStore + Send> = match cursor_store_value {
+    let cursor_store: CursorStore = match cursor_store_value {
         CursorStoreType::CockroachDB => {
             let _ = init_crdb_cursor_store(&pool).await?;
-            Box::new(CrdbCursorStore::new(pool.clone()))
+            Arc::new(CrdbCursorStore::new(pool.clone()))
         },
     };
 
@@ -116,33 +121,69 @@ fn build_changefeed_query(table_name: String, cursor_frequency_value: String, cu
     format!("{}", query)
 } 
 
-async fn process_changefeed(pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>, table_name: String, cursor_frequency_value: String) {
-    let query = {
-        let cursor_result = cursor_store.get();
+async fn process_changefeed(pool: PgPool, message_queue: MessageQueue, cursor_store: CursorStore, table_name: String, cursor_frequency_value: String) {
+    let mut ignore_cursor = false;
 
-        let cursor_opt = match cursor_result.await {
-            Ok(result) => result,
+    loop {
+        let query = {
+            let cursor_result = cursor_store.get();
+    
+            let cursor_opt = if ignore_cursor { 
+                None
+            } else { 
+                match cursor_result.await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!("getting cursor result: {:?}", e);
+                        return;
+                    }
+                }
+            };
+    
+            build_changefeed_query(table_name.clone(), cursor_frequency_value.clone(), cursor_opt)
+        };
+        
+        debug!("query: {}", &query);
+
+        let retry = match execute_changefeed(query.clone(), pool.clone(), message_queue.clone(), cursor_store.clone()).await {
+            Ok(_) => RetryReason::None,
             Err(e) => {
-                error!("getting cursor result: {:?}", e);
-                return;
-            }
+                error!("error executing changefeed: {:?}", &e);
+                should_retry(e)
+            },
         };
 
-        build_changefeed_query(table_name, cursor_frequency_value, cursor_opt)
-    };
-    
-    debug!("query: {}", &query);
-
-
-    match execute_changefeed(query, pool, message_queue, cursor_store).await {
-        Ok(_) => {},
-        Err(e) => {
-            error!("error executing changefeed: {:?}", e);
-        },
-    };
+        match retry {
+            RetryReason::InvalidCursor => {
+                ignore_cursor = true
+            },
+            RetryReason::None => {
+                break;
+            }
+        }
+    }
 }
 
-async fn execute_changefeed(query: String, pool: PgPool, message_queue: Box<dyn MessageQueue + Send>, cursor_store: Box<dyn CursorStore + Send>) -> Result<(), Error> {
+enum RetryReason {
+    InvalidCursor,
+    None,
+}
+
+fn should_retry(e: Error) -> RetryReason {
+    if let Error::SqlxError(v) = e {
+        if let sqlx::Error::Database(dbe) = v {
+            // batch timestamp 1595866288.020022200,0 must be after replica GC threshold 1595868416.278231500,0
+            let re = Regex::new(r#"^batch timestamp [0-9.,]* must be after replica GC threshold [0-9.,]*$"#).unwrap();
+            if re.is_match(dbe.message()) {
+                return RetryReason::InvalidCursor;
+            }
+        }
+    }
+
+    RetryReason::None
+}
+
+async fn execute_changefeed(query: String, pool: PgPool, message_queue: MessageQueue, cursor_store: CursorStore) -> Result<(), Error> {
     let mut cursor = sqlx::query(&query).fetch(&pool);
 
     while let Some(row) = cursor.next().await? {

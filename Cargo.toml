@@ -25,3 +25,4 @@ serde = "1.0"
 futures = "0.3.5"
 async-trait = "0.1.36"
 clap = { version = "2.33", features = ["yaml"] }
+regex = "1"
