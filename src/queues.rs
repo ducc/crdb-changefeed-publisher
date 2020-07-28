@@ -7,10 +7,13 @@ use lapin::{
         QueueDeclareOptions,
     }, 
     Channel,
+    Connection,
+    ConnectionProperties,
     BasicProperties,
     types::FieldTable,
 };
 use async_trait::async_trait;
+use tokio_amqp::LapinTokioExt;
 
 #[async_trait]
 pub trait MessageQueue {
@@ -23,11 +26,20 @@ pub struct RabbitMQ {
 }
 
 impl RabbitMQ {
-    pub fn new(channel: Channel, queue_name: String) -> Self {
-        Self {
-            channel: channel,
-            queue_name: queue_name,
-        }
+    pub async fn new(mq_addr: String, queue_name: String) -> Result<Self, Error> {
+        let conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
+        let channel = conn.create_channel().await?;
+
+        let _queue = channel.queue_declare(
+            &queue_name,
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        ).await?;
+
+        Ok(Self {
+            channel,
+            queue_name,
+        })
     }
 }
 
@@ -49,14 +61,4 @@ impl MessageQueue for RabbitMQ {
             Err(e) => Err(Error::LapinError(e)),
         }
     }
-}
-
-pub async fn init_rabbitmq_channel(message_queue: &RabbitMQ) -> Result<(), Error> {
-    let _queue = message_queue.channel.queue_declare(
-        &message_queue.queue_name,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    ).await?;
-
-    Ok(())
 }

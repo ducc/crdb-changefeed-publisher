@@ -10,15 +10,10 @@ mod queues;
 use error::Error;
 use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change, QueueType, CursorStoreType};
 use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
-use cursors::{init_crdb_cursor_store, CrdbCursorStore};
-use queues::{RabbitMQ, init_rabbitmq_channel};
+use cursors::CrdbCursorStore;
+use queues::RabbitMQ;
 
-use tokio_amqp::*;
-use lapin::{
-    Connection, 
-    ConnectionProperties,
-};
-use tracing::{trace, debug, error};
+use tracing::{debug, error};
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 use std::{
     string::String, 
@@ -71,10 +66,7 @@ async fn main() -> Result<(), Error> {
         QueueType::RabbitMQ => {
             let mq_addr = std::env::var("AMQP_ADDR").expect("amqp addr is required");
             let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
-            let mq_conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
-            let mq_chan = mq_conn.create_channel().await?;
-            let message_queue = Arc::new(RabbitMQ::new(mq_chan, queue_name));
-            let _ = init_rabbitmq_channel(&message_queue).await?;
+            let message_queue = Arc::new(RabbitMQ::new(mq_addr, queue_name).await?);
             message_queue
         },
     };
@@ -86,8 +78,7 @@ async fn main() -> Result<(), Error> {
 
     let cursor_store: CursorStore = match cursor_store_value {
         CursorStoreType::CockroachDB => {
-            let _ = init_crdb_cursor_store(&pool).await?;
-            Arc::new(CrdbCursorStore::new(pool.clone()))
+            Arc::new(CrdbCursorStore::new(pool.clone()).await?)
         },
     };
 
@@ -172,7 +163,7 @@ enum RetryReason {
 fn should_retry(e: Error) -> RetryReason {
     if let Error::SqlxError(v) = e {
         if let sqlx::Error::Database(dbe) = v {
-            // batch timestamp 1595866288.020022200,0 must be after replica GC threshold 1595868416.278231500,0
+            // e.g. batch timestamp 1595866288.020022200,0 must be after replica GC threshold 1595868416.278231500,0
             let re = Regex::new(r#"^batch timestamp [0-9.,]* must be after replica GC threshold [0-9.,]*$"#).unwrap();
             if re.is_match(dbe.message()) {
                 return RetryReason::InvalidCursor;
@@ -197,14 +188,14 @@ async fn execute_changefeed(query: String, pool: PgPool, message_queue: MessageQ
             ProcessedChange::Row(row) => {
                 let payload = ChangePayload::new(row.table, row.key, row.value)?;
                 let payload = serde_json::to_string(&payload)?;
-                trace!("change={}", &payload);
+                debug!("change={}", &payload);
 
                 let publish_handle = message_queue.publish(payload.into_bytes());
                 publish_handle.await?;
             },
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
-                trace!("cursor={}", &parsed.resolved);
+                debug!("cursor={}", &parsed.resolved);
 
                 let cursor_handle = cursor_store.set(parsed.resolved);
                 cursor_handle.await?;

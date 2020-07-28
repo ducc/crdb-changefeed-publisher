@@ -18,10 +18,12 @@ pub struct CrdbCursorStore {
 }
 
 impl CrdbCursorStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self {
+    pub async fn new(pool: PgPool) -> Result<Self, Error> {
+        let _ = sqlx::query("CREATE TABLE IF NOT EXISTS cursor_store (key STRING NOT NULL PRIMARY KEY, cursor STRING NOT NULL);").execute(&pool).await?;
+
+        Ok(Self {
             pool: pool,
-        }
+        })
     }
 }
  
@@ -55,13 +57,5 @@ impl CursorStore for CrdbCursorStore {
             Ok(_) => Ok(()),
             Err(e) => Err(Error::SqlxError(e))
         }
-    }
-}
-
-pub async fn init_crdb_cursor_store(pool: &PgPool) -> Result<(), Error> {
-    let result = sqlx::query("CREATE TABLE IF NOT EXISTS cursor_store (key STRING NOT NULL PRIMARY KEY, cursor STRING NOT NULL);").execute(pool).await;
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(Error::SqlxError(e)),
     }
 }
