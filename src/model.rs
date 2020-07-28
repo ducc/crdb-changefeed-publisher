@@ -51,7 +51,7 @@ pub struct ChangeCursor {
 
 impl ChangeCursor {
     pub fn new(cursor: String) -> Self {
-        Self { cursor: cursor, }
+        Self { cursor: cursor }
     }
 }
 
@@ -63,7 +63,7 @@ pub enum ProcessedChange {
 #[derive(Deserialize)]
 pub struct JsonCursor {
     pub resolved: String,
-} 
+}
 
 #[derive(Serialize)]
 pub struct ChangePayload {

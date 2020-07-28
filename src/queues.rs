@@ -1,18 +1,12 @@
 use crate::Error;
 use crate::RABBITMQ_MESSAGES_SENT_COUNTER;
 
-use lapin::{
-    options::{
-        BasicPublishOptions, 
-        QueueDeclareOptions,
-    }, 
-    Channel,
-    Connection,
-    ConnectionProperties,
-    BasicProperties,
-    types::FieldTable,
-};
 use async_trait::async_trait;
+use lapin::{
+    options::{BasicPublishOptions, QueueDeclareOptions},
+    types::FieldTable,
+    BasicProperties, Channel, Connection, ConnectionProperties,
+};
 use tokio_amqp::LapinTokioExt;
 
 #[async_trait]
@@ -27,14 +21,17 @@ pub struct RabbitMQ {
 
 impl RabbitMQ {
     pub async fn new(mq_addr: String, queue_name: String) -> Result<Self, Error> {
-        let conn = Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?; 
+        let conn =
+            Connection::connect(&mq_addr, ConnectionProperties::default().with_tokio()).await?;
         let channel = conn.create_channel().await?;
 
-        let _queue = channel.queue_declare(
-            &queue_name,
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        ).await?;
+        let _queue = channel
+            .queue_declare(
+                &queue_name,
+                QueueDeclareOptions::default(),
+                FieldTable::default(),
+            )
+            .await?;
 
         Ok(Self {
             channel,
@@ -46,13 +43,17 @@ impl RabbitMQ {
 #[async_trait]
 impl MessageQueue for RabbitMQ {
     async fn publish(&self, data: Vec<u8>) -> Result<(), Error> {
-        let publish_result = self.channel.basic_publish(
-            "",
-            &self.queue_name,
-            BasicPublishOptions::default(),
-            data,
-            BasicProperties::default(),
-        ).await?.await;
+        let publish_result = self
+            .channel
+            .basic_publish(
+                "",
+                &self.queue_name,
+                BasicPublishOptions::default(),
+                data,
+                BasicProperties::default(),
+            )
+            .await?
+            .await;
 
         RABBITMQ_MESSAGES_SENT_COUNTER.inc();
 

@@ -1,31 +1,27 @@
 #![feature(async_closure)]
 #![feature(try_trait)]
 
-mod error;
-mod model;
-mod metrics;
 mod cursors;
+mod error;
+mod metrics;
+mod model;
 mod queues;
 
-use error::Error;
-use model::{ChangeRow, ChangeCursor, ProcessedChange, JsonCursor, ChangePayload, Change, QueueType, CursorStoreType};
-use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
 use cursors::CrdbCursorStore;
+use error::Error;
+use metrics::{run_warp, RABBITMQ_MESSAGES_SENT_COUNTER};
+use model::{
+    Change, ChangeCursor, ChangePayload, ChangeRow, CursorStoreType, JsonCursor, ProcessedChange,
+    QueueType,
+};
 use queues::RabbitMQ;
 
-use tracing::{debug, error};
-use tracing_subscriber::{FmtSubscriber, EnvFilter};
-use std::{
-    string::String, 
-    net::SocketAddr,
-    sync::Arc,
-};
-use sqlx::{
-    postgres::PgPool,
-    prelude::*,
-};
 use clap::{load_yaml, App};
 use regex::Regex;
+use sqlx::{postgres::PgPool, prelude::*};
+use std::{net::SocketAddr, string::String, sync::Arc};
+use tracing::{debug, error};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 type MessageQueue = Arc<dyn queues::MessageQueue + Send + Sync>;
 type CursorStore = Arc<dyn cursors::CursorStore + Send + Sync>;
@@ -50,8 +46,11 @@ async fn main() -> Result<(), Error> {
     let matches = App::from_yaml(yaml).get_matches();
 
     let table_value = matches.value_of("table").expect("unable to get table name");
-    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq")).expect("unable to get queue type");
-    let cursor_store_value = CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb")).expect("unable to get cursor store type");
+    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq"))
+        .expect("unable to get queue type");
+    let cursor_store_value =
+        CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb"))
+            .expect("unable to get cursor store type");
     let cursor_frequency_value = matches.value_of("cursor-frequency").unwrap_or("10s");
 
     // get the environment variables
@@ -59,7 +58,9 @@ async fn main() -> Result<(), Error> {
     let database_url = std::env::var("DATABASE_URL").expect("database url is required");
 
     // start the prometheus server
-    let prom_addr: SocketAddr = prom_addr_raw.parse().expect("cannot parse prometheus address");
+    let prom_addr: SocketAddr = prom_addr_raw
+        .parse()
+        .expect("cannot parse prometheus address");
     let warp_handle = tokio::spawn(run_warp(prom_addr));
 
     let message_queue: MessageQueue = match queue_value {
@@ -68,22 +69,24 @@ async fn main() -> Result<(), Error> {
             let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
             let message_queue = Arc::new(RabbitMQ::new(mq_addr, queue_name).await?);
             message_queue
-        },
+        }
     };
 
     // connect to cockroachdb
-    let pool = PgPool::builder()
-        .max_size(5)
-        .build(&database_url).await?;
+    let pool = PgPool::builder().max_size(5).build(&database_url).await?;
 
     let cursor_store: CursorStore = match cursor_store_value {
-        CursorStoreType::CockroachDB => {
-            Arc::new(CrdbCursorStore::new(pool.clone()).await?)
-        },
+        CursorStoreType::CockroachDB => Arc::new(CrdbCursorStore::new(pool.clone()).await?),
     };
 
     // begin processing cockroachdb changefeeds
-    let cf_handle = tokio::spawn(process_changefeed(pool, message_queue, cursor_store, table_value.to_owned(), cursor_frequency_value.to_owned()));
+    let cf_handle = tokio::spawn(process_changefeed(
+        pool,
+        message_queue,
+        cursor_store,
+        table_value.to_owned(),
+        cursor_frequency_value.to_owned(),
+    ));
 
     tokio::select! {
         cf_result = cf_handle => {
@@ -102,26 +105,39 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn build_changefeed_query(table_name: String, cursor_frequency_value: String, cursor: Option<String>) -> String {
-    let mut query = format!("EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}'", table_name, cursor_frequency_value);
-    
+fn build_changefeed_query(
+    table_name: String,
+    cursor_frequency_value: String,
+    cursor: Option<String>,
+) -> String {
+    let mut query = format!(
+        "EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}'",
+        table_name, cursor_frequency_value
+    );
+
     if let Some(cursor) = cursor {
         query = format!("{}, cursor = '{}'", query, cursor);
     }
 
     format!("{}", query)
-} 
+}
 
-async fn process_changefeed(pool: PgPool, message_queue: MessageQueue, cursor_store: CursorStore, table_name: String, cursor_frequency_value: String) {
+async fn process_changefeed(
+    pool: PgPool,
+    message_queue: MessageQueue,
+    cursor_store: CursorStore,
+    table_name: String,
+    cursor_frequency_value: String,
+) {
     let mut ignore_cursor = false;
 
     loop {
         let query = {
             let cursor_result = cursor_store.get();
-    
-            let cursor_opt = if ignore_cursor { 
+
+            let cursor_opt = if ignore_cursor {
                 None
-            } else { 
+            } else {
                 match cursor_result.await {
                     Ok(result) => result,
                     Err(e) => {
@@ -130,24 +146,33 @@ async fn process_changefeed(pool: PgPool, message_queue: MessageQueue, cursor_st
                     }
                 }
             };
-    
-            build_changefeed_query(table_name.clone(), cursor_frequency_value.clone(), cursor_opt)
+
+            build_changefeed_query(
+                table_name.clone(),
+                cursor_frequency_value.clone(),
+                cursor_opt,
+            )
         };
-        
+
         debug!("query: {}", &query);
 
-        let retry = match execute_changefeed(query.clone(), pool.clone(), message_queue.clone(), cursor_store.clone()).await {
+        let retry = match execute_changefeed(
+            query.clone(),
+            pool.clone(),
+            message_queue.clone(),
+            cursor_store.clone(),
+        )
+        .await
+        {
             Ok(_) => RetryReason::None,
             Err(e) => {
                 error!("error executing changefeed: {:?}", &e);
                 should_retry(e)
-            },
+            }
         };
 
         match retry {
-            RetryReason::InvalidCursor => {
-                ignore_cursor = true
-            },
+            RetryReason::InvalidCursor => ignore_cursor = true,
             RetryReason::None => {
                 break;
             }
@@ -164,7 +189,10 @@ fn should_retry(e: Error) -> RetryReason {
     if let Error::SqlxError(v) = e {
         if let sqlx::Error::Database(dbe) = v {
             // e.g. batch timestamp 1595866288.020022200,0 must be after replica GC threshold 1595868416.278231500,0
-            let re = Regex::new(r#"^batch timestamp [0-9.,]* must be after replica GC threshold [0-9.,]*$"#).unwrap();
+            let re = Regex::new(
+                r#"^batch timestamp [0-9.,]* must be after replica GC threshold [0-9.,]*$"#,
+            )
+            .unwrap();
             if re.is_match(dbe.message()) {
                 return RetryReason::InvalidCursor;
             }
@@ -174,7 +202,12 @@ fn should_retry(e: Error) -> RetryReason {
     RetryReason::None
 }
 
-async fn execute_changefeed(query: String, pool: PgPool, message_queue: MessageQueue, cursor_store: CursorStore) -> Result<(), Error> {
+async fn execute_changefeed(
+    query: String,
+    pool: PgPool,
+    message_queue: MessageQueue,
+    cursor_store: CursorStore,
+) -> Result<(), Error> {
     let mut cursor = sqlx::query(&query).fetch(&pool);
 
     while let Some(row) = cursor.next().await? {
@@ -192,14 +225,14 @@ async fn execute_changefeed(query: String, pool: PgPool, message_queue: MessageQ
 
                 let publish_handle = message_queue.publish(payload.into_bytes());
                 publish_handle.await?;
-            },
+            }
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
                 debug!("cursor={}", &parsed.resolved);
 
                 let cursor_handle = cursor_store.set(parsed.resolved);
                 cursor_handle.await?;
-            },
+            }
         }
     }
 
@@ -218,4 +251,3 @@ fn process_change(change: Change) -> Result<ProcessedChange, Error> {
 
     Ok(ProcessedChange::Row(ChangeRow::new(table, key, value)))
 }
-
