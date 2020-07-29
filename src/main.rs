@@ -40,7 +40,7 @@ async fn main() -> Result<(), Error> {
     tracing::subscriber::set_global_default(subscriber)
         .expect("unable to set default trace subscriber");
 
-    env_logger::init();
+    tracing_log::LogTracer::init()?;
 
     let yaml = load_yaml!("../cli.yml");
     let matches = App::from_yaml(yaml).get_matches();

@@ -11,6 +11,7 @@ pub enum Error {
     VarError(std::env::VarError),
     NoneError(std::option::NoneError),
     SerdeJsonError(serde_json::Error),
+    SetLoggerError(tracing::log::SetLoggerError),
 }
 
 impl From<std::io::Error> for Error {
@@ -76,5 +77,11 @@ impl From<std::string::FromUtf8Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Error {
         Error::SerdeJsonError(e)
+    }
+}
+
+impl From<tracing::log::SetLoggerError> for Error {
+    fn from(e: tracing::log::SetLoggerError) -> Error {
+        Error::SetLoggerError(e)
     }
 }

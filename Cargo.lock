@@ -355,6 +355,7 @@ dependencies = [
  "tokio-amqp",
  "tracing",
  "tracing-futures",
+ "tracing-log",
  "tracing-subscriber",
  "warp",
 ]
