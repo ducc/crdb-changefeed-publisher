@@ -1,5 +1,4 @@
 #![feature(async_closure)]
-#![feature(try_trait)]
 
 mod cursors;
 mod error;
@@ -18,10 +17,14 @@ use queues::RabbitMQ;
 
 use clap::{load_yaml, App};
 use regex::Regex;
-use sqlx::{postgres::PgPool, prelude::*};
+use sqlx::{Pool, Postgres, postgres::PgPool, prelude::*};
 use std::{net::SocketAddr, string::String, sync::Arc};
+use futures_util::StreamExt;
+use sqlx::postgres::PgConnectOptions;
 use tracing::{debug, error};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use crate::queues::StdoutDump;
+use crate::QueueType::Stdout;
 
 type MessageQueue = Arc<dyn queues::MessageQueue + Send + Sync>;
 type CursorStore = Arc<dyn cursors::CursorStore + Send + Sync>;
@@ -46,7 +49,7 @@ async fn main() -> Result<(), Error> {
     let matches = App::from_yaml(yaml).get_matches();
 
     let table_value = matches.value_of("table").expect("unable to get table name");
-    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("rabbitmq"))
+    let queue_value = QueueType::from_name(matches.value_of("queue").unwrap_or("stdout"))
         .expect("unable to get queue type");
     let cursor_store_value =
         CursorStoreType::from_name(matches.value_of("cursor-store").unwrap_or("cockroachdb"))
@@ -56,6 +59,8 @@ async fn main() -> Result<(), Error> {
     // get the environment variables
     let prom_addr_raw = std::env::var("PROMETHEUS_ADDR").unwrap_or_else(|_| "0.0.0.0:8001".into());
     let database_url = std::env::var("DATABASE_URL").expect("database url is required");
+    // let database_user = std::env::var("DATABASE_USER").expect("database username is required");
+    // let database_password = std::env::var("DATABASE_PASSWORD").expect("database password is required");
 
     // start the prometheus server
     let prom_addr: SocketAddr = prom_addr_raw
@@ -70,10 +75,14 @@ async fn main() -> Result<(), Error> {
             let message_queue = Arc::new(RabbitMQ::new(mq_addr, queue_name).await?);
             message_queue
         }
+        QueueType::Stdout => {
+            Arc::new(StdoutDump {})
+        }
     };
 
     // connect to cockroachdb
-    let pool = PgPool::builder().max_size(5).build(&database_url).await?;
+    // PgPool::
+    let pool = PgPool::connect(&database_url).await?;
 
     let cursor_store: CursorStore = match cursor_store_value {
         CursorStoreType::CockroachDB => Arc::new(CrdbCursorStore::new(pool.clone()).await?),
@@ -117,13 +126,15 @@ fn build_changefeed_query(
 
     if let Some(cursor) = cursor {
         query = format!("{}, cursor = '{}'", query, cursor);
+    } else {
+        query = format!("{}, no_initial_scan", query);
     }
 
     format!("{}", query)
 }
 
 async fn process_changefeed(
-    pool: PgPool,
+    pool: Pool<Postgres>,
     message_queue: MessageQueue,
     cursor_store: CursorStore,
     table_name: String,
@@ -204,13 +215,13 @@ fn should_retry(e: Error) -> RetryReason {
 
 async fn execute_changefeed(
     query: String,
-    pool: PgPool,
+    pool: Pool<Postgres>,
     message_queue: MessageQueue,
     cursor_store: CursorStore,
 ) -> Result<(), Error> {
     let mut cursor = sqlx::query(&query).fetch(&pool);
 
-    while let Some(row) = cursor.next().await? {
+    while let row = cursor.next().await.unwrap().unwrap() {
         let table_opt: Option<&str> = row.try_get(0)?;
         let key_bytes: Option<Vec<u8>> = row.try_get(1)?;
         let value_bytes: Option<Vec<u8>> = row.try_get(2)?;
@@ -240,14 +251,14 @@ async fn execute_changefeed(
 }
 
 fn process_change(change: Change) -> Result<ProcessedChange, Error> {
-    let value = String::from_utf8(change.value?)?;
+    let value = String::from_utf8(change.value.unwrap())?;
 
     if change.table.is_none() && change.key.is_none() {
         return Ok(ProcessedChange::Cursor(ChangeCursor::new(value)));
     }
 
-    let table = change.table?.to_owned();
-    let key = String::from_utf8(change.key?)?;
+    let table = change.table.unwrap().to_owned();
+    let key = String::from_utf8(change.key.unwrap())?;
 
     Ok(ProcessedChange::Row(ChangeRow::new(table, key, value)))
 }

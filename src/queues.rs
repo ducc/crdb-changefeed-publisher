@@ -1,3 +1,4 @@
+use std::io::Write;
 use crate::Error;
 use crate::RABBITMQ_MESSAGES_SENT_COUNTER;
 
@@ -12,6 +13,18 @@ use tokio_amqp::LapinTokioExt;
 #[async_trait]
 pub trait MessageQueue {
     async fn publish(&self, data: Vec<u8>) -> Result<(), Error>;
+}
+
+pub struct StdoutDump {}
+
+impl StdoutDump {}
+
+#[async_trait]
+impl MessageQueue for StdoutDump {
+    async fn publish(&self, data: Vec<u8>) -> Result<(), Error> {
+        std::io::stdout().write_all(&data)?;
+        Ok(())
+    }
 }
 
 pub struct RabbitMQ {
@@ -63,3 +76,4 @@ impl MessageQueue for RabbitMQ {
         }
     }
 }
+

@@ -3,6 +3,7 @@ use crate::Error;
 use async_trait::async_trait;
 use sqlx::{postgres::PgPool, prelude::*};
 use std::string::String;
+use futures_util::StreamExt;
 
 #[async_trait]
 pub trait CursorStore {
@@ -25,21 +26,22 @@ impl CrdbCursorStore {
 #[async_trait]
 impl CursorStore for CrdbCursorStore {
     async fn get(&self) -> Result<Option<String>, Error> {
-        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = 'key';");
-        let mut fetched = query.fetch(&self.pool);
+        // let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = 'key';");
+        // let mut fetched = query.fetch(&self.pool);
+        //
+        // let row = match fetched.next().await.unwrap() {
+        //     Ok(v) => v,
+        //     Err(e) => return Err(Error::SqlxError(e)),
+        // };
 
-        let row = match fetched.next().await {
-            Ok(v) => v,
-            Err(e) => return Err(Error::SqlxError(e)),
-        };
-
-        match row {
-            Some(v) => {
-                let s: String = v.get(0);
-                Ok(Some(s))
-            }
-            None => Ok(None),
-        }
+        // match row {
+        //     Some(v) => {
+        //         let s: String = v.get(0);
+        //         Ok(Some(s))
+        //     }
+        //     None => Ok(None),
+        // }
+        Ok(None)
     }
 
     async fn set(&self, cursor: String) -> Result<(), Error> {

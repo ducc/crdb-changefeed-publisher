@@ -9,7 +9,7 @@ pub enum Error {
     JoinError(tokio::task::JoinError),
     SqlxError(sqlx::Error),
     VarError(std::env::VarError),
-    NoneError(std::option::NoneError),
+    // NoneError(std::option::NoneError),
     SerdeJsonError(serde_json::Error),
     SetLoggerError(tracing::log::SetLoggerError),
 }
@@ -59,12 +59,6 @@ impl From<sqlx::Error> for Error {
 impl From<std::env::VarError> for Error {
     fn from(e: std::env::VarError) -> Error {
         Error::VarError(e)
-    }
-}
-
-impl From<std::option::NoneError> for Error {
-    fn from(e: std::option::NoneError) -> Error {
-        Error::NoneError(e)
     }
 }
 

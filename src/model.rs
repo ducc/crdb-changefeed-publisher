@@ -5,12 +5,14 @@ use serde_json::value::RawValue;
 
 pub enum QueueType {
     RabbitMQ,
+    Stdout
 }
 
 impl QueueType {
     pub fn from_name(name: &str) -> Option<QueueType> {
         match name {
             "rabbitmq" => Some(QueueType::RabbitMQ),
+            "stdout" => Some(QueueType::Stdout),
             _ => None,
         }
     }
