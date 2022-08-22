@@ -1,9 +1,9 @@
-use crate::Error;
+use std::string::String;
 
 use async_trait::async_trait;
-use sqlx::{postgres::PgPool, prelude::*};
-use std::string::String;
-use futures_util::StreamExt;
+use sqlx::{postgres::PgPool};
+
+use crate::Error;
 
 #[async_trait]
 pub trait CursorStore {

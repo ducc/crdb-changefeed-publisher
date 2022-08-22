@@ -1,18 +1,21 @@
 use std::io::Write;
-use crate::Error;
-use crate::RABBITMQ_MESSAGES_SENT_COUNTER;
-
 use async_trait::async_trait;
+use tracing::{debug};
+
 use lapin::{
-    options::{BasicPublishOptions, QueueDeclareOptions},
-    types::FieldTable,
-    BasicProperties, Channel, Connection, ConnectionProperties,
+    BasicProperties,
+    Channel,
+    Connection, ConnectionProperties, options::{BasicPublishOptions, QueueDeclareOptions}, types::FieldTable,
 };
 use tokio_amqp::LapinTokioExt;
+
+use crate::Error;
+use crate::RABBITMQ_MESSAGES_SENT_COUNTER;
 
 #[async_trait]
 pub trait MessageQueue {
     async fn publish(&self, data: Vec<u8>) -> Result<(), Error>;
+    // async fn flush(&self) -> Result<(), Error>;
 }
 
 pub struct StdoutDump {}
@@ -77,3 +80,33 @@ impl MessageQueue for RabbitMQ {
     }
 }
 
+pub struct SQSQueue {
+    queue_url: String,
+    client: aws_sdk_sqs::Client
+}
+
+impl SQSQueue {
+    pub async fn new(queue_url: String) -> Result<Self, Error> {
+        let config = aws_config::load_from_env().await;
+        let client = aws_sdk_sqs::Client::new(&config);
+
+        Ok(SQSQueue {
+            queue_url,
+            client
+        })
+    }
+}
+
+#[async_trait]
+impl MessageQueue for SQSQueue {
+    async fn publish(&self, data: Vec<u8>) -> Result<(), Error> {
+        debug!("Publishing to sqs");
+
+        self.client.send_message()
+            .queue_url(&self.queue_url)
+            .message_body(std::str::from_utf8(&data)?)
+            .send().await?;
+
+        Ok(())
+    }
+}

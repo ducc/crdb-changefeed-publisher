@@ -1,3 +1,5 @@
+use aws_sdk_sqs::error::SendMessageError;
+
 #[derive(Debug)]
 pub enum Error {
     IoError(std::io::Error),
@@ -12,6 +14,7 @@ pub enum Error {
     // NoneError(std::option::NoneError),
     SerdeJsonError(serde_json::Error),
     SetLoggerError(tracing::log::SetLoggerError),
+    SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>)
 }
 
 impl From<std::io::Error> for Error {
@@ -78,4 +81,8 @@ impl From<tracing::log::SetLoggerError> for Error {
     fn from(e: tracing::log::SetLoggerError) -> Error {
         Error::SetLoggerError(e)
     }
+}
+
+impl From<aws_smithy_http::result::SdkError<SendMessageError>> for Error {
+    fn from(e: aws_smithy_http::result::SdkError<SendMessageError>) -> Error { Error::SendMessageError(e)}
 }

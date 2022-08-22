@@ -27,6 +27,9 @@ futures = "0.3.5"
 async-trait = "0.1.36"
 clap = { version = "2.33", features = ["yaml"] }
 regex = "1"
+aws-sdk-sqs = "0.17.0"
+aws-config = "0.47.0"
+aws-smithy-http = "0.47.0"
 
 [patch]
 #pin-project-internal = "1.0.12"

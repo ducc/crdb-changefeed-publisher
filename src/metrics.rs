@@ -1,9 +1,10 @@
-use crate::Error;
+use std::{convert::Infallible, net::SocketAddr, str::from_utf8, vec::Vec};
 
 use lazy_static::lazy_static;
-use prometheus::{self, register_int_counter, Encoder, IntCounter, TextEncoder};
-use std::{convert::Infallible, net::SocketAddr, str::from_utf8, vec::Vec};
+use prometheus::{self, Encoder, IntCounter, register_int_counter, TextEncoder};
 use warp::Filter;
+
+use crate::Error;
 
 // initialize the prometheus metrics
 lazy_static! {

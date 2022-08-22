@@ -1,30 +1,32 @@
 #![feature(async_closure)]
 
-mod cursors;
-mod error;
-mod metrics;
-mod model;
-mod queues;
+use std::{net::SocketAddr, string::String, sync::Arc};
+use std::panic::panic_any;
+
+use clap::{App, load_yaml};
+use futures_util::StreamExt;
+use regex::Regex;
+use sqlx::{Pool, Postgres, postgres::PgPool, prelude::*};
+use tracing::{debug, error};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use cursors::CrdbCursorStore;
 use error::Error;
-use metrics::{run_warp, RABBITMQ_MESSAGES_SENT_COUNTER};
+use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
 use model::{
     Change, ChangeCursor, ChangePayload, ChangeRow, CursorStoreType, JsonCursor, ProcessedChange,
     QueueType,
 };
 use queues::RabbitMQ;
 
-use clap::{load_yaml, App};
-use regex::Regex;
-use sqlx::{Pool, Postgres, postgres::PgPool, prelude::*};
-use std::{net::SocketAddr, string::String, sync::Arc};
-use futures_util::StreamExt;
-use sqlx::postgres::PgConnectOptions;
-use tracing::{debug, error};
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use crate::queues::StdoutDump;
-use crate::QueueType::Stdout;
+use crate::queues::{SQSQueue, StdoutDump};
+
+mod cursors;
+mod error;
+mod metrics;
+mod model;
+mod queues;
+mod queue_buffer;
 
 type MessageQueue = Arc<dyn queues::MessageQueue + Send + Sync>;
 type CursorStore = Arc<dyn cursors::CursorStore + Send + Sync>;
@@ -45,6 +47,7 @@ async fn main() -> Result<(), Error> {
 
     tracing_log::LogTracer::init()?;
 
+    debug!("test");
     let yaml = load_yaml!("../cli.yml");
     let matches = App::from_yaml(yaml).get_matches();
 
@@ -75,8 +78,10 @@ async fn main() -> Result<(), Error> {
             let message_queue = Arc::new(RabbitMQ::new(mq_addr, queue_name).await?);
             message_queue
         }
-        QueueType::Stdout => {
-            Arc::new(StdoutDump {})
+        QueueType::Stdout => Arc::new(StdoutDump {}),
+        QueueType::SQS => {
+            let queue_url = std::env::var("SQS_QUEUE_URL").expect("SQS queue url is required");
+            Arc::new(SQSQueue::new(queue_url).await?)
         }
     };
 
@@ -100,13 +105,13 @@ async fn main() -> Result<(), Error> {
     tokio::select! {
         cf_result = cf_handle => {
             if let Err(e) = cf_result {
-                panic!(e);
+                panic_any(e);
             }
         }
 
         warp_result = warp_handle => {
             if let Err(e) = warp_result {
-                panic!(e);
+                panic_any(e);
             }
         }
     };
@@ -220,8 +225,9 @@ async fn execute_changefeed(
     cursor_store: CursorStore,
 ) -> Result<(), Error> {
     let mut cursor = sqlx::query(&query).fetch(&pool);
+    let mut buffer = queue_buffer::QueueBuffer::new(message_queue, 100);
 
-    while let row = cursor.next().await.unwrap().unwrap() {
+    while let Some(Ok(row)) = cursor.next().await {
         let table_opt: Option<&str> = row.try_get(0)?;
         let key_bytes: Option<Vec<u8>> = row.try_get(1)?;
         let value_bytes: Option<Vec<u8>> = row.try_get(2)?;
@@ -231,16 +237,20 @@ async fn execute_changefeed(
         match process_change(change)? {
             ProcessedChange::Row(row) => {
                 let payload = ChangePayload::new(row.table, row.key, row.value)?;
-                let payload = serde_json::to_string(&payload)?;
-                debug!("change={}", &payload);
+                buffer.push(payload).await?;
+                // let payload = serde_json::to_string(&payload)?;
+                // debug!("change={}", &payload);
 
-                let publish_handle = message_queue.publish(payload.into_bytes());
-                publish_handle.await?;
+                // let publish_handle = message_queue.publish(payload.into_bytes());
+                // publish_handle.await?;
+
             }
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
                 debug!("cursor={}", &parsed.resolved);
 
+
+                buffer.flush().await?;
                 let cursor_handle = cursor_store.set(parsed.resolved);
                 cursor_handle.await?;
             }

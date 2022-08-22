@@ -1,11 +1,12 @@
-use crate::Error;
-
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use crate::Error;
+
 pub enum QueueType {
     RabbitMQ,
-    Stdout
+    Stdout,
+    SQS
 }
 
 impl QueueType {
@@ -13,6 +14,7 @@ impl QueueType {
         match name {
             "rabbitmq" => Some(QueueType::RabbitMQ),
             "stdout" => Some(QueueType::Stdout),
+            "sqs" => Some(QueueType::SQS),
             _ => None,
         }
     }
