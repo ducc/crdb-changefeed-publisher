@@ -135,7 +135,7 @@ fn build_changefeed_query(
         query = format!("{}, no_initial_scan", query);
     }
 
-    format!("{}", query)
+    format!("{};", query)
 }
 
 async fn process_changefeed(
@@ -180,7 +180,10 @@ async fn process_changefeed(
         )
         .await
         {
-            Ok(_) => RetryReason::None,
+            Ok(_) => {
+                println!("Query exiting early for some reason");
+                RetryReason::None
+            },
             Err(e) => {
                 error!("error executing changefeed: {:?}", &e);
                 should_retry(e)
@@ -227,10 +230,11 @@ async fn execute_changefeed(
     let mut cursor = sqlx::query(&query).fetch(&pool);
     let mut buffer = queue_buffer::QueueBuffer::new(message_queue, 100);
 
-    while let Some(Ok(row)) = cursor.next().await {
-        let table_opt: Option<&str> = row.try_get(0)?;
-        let key_bytes: Option<Vec<u8>> = row.try_get(1)?;
-        let value_bytes: Option<Vec<u8>> = row.try_get(2)?;
+    while let Some(row) = cursor.next().await {
+        let value = row?;
+        let table_opt: Option<&str> = value.try_get(0)?;
+        let key_bytes: Option<Vec<u8>> = value.try_get(1)?;
+        let value_bytes: Option<Vec<u8>> = value.try_get(2)?;
 
         let change = Change::new(table_opt, key_bytes, value_bytes);
 
@@ -238,17 +242,10 @@ async fn execute_changefeed(
             ProcessedChange::Row(row) => {
                 let payload = ChangePayload::new(row.table, row.key, row.value)?;
                 buffer.push(payload).await?;
-                // let payload = serde_json::to_string(&payload)?;
-                // debug!("change={}", &payload);
-
-                // let publish_handle = message_queue.publish(payload.into_bytes());
-                // publish_handle.await?;
-
             }
             ProcessedChange::Cursor(cursor) => {
                 let parsed: JsonCursor = serde_json::from_str(&cursor.cursor)?;
                 debug!("cursor={}", &parsed.resolved);
-
 
                 buffer.flush().await?;
                 let cursor_handle = cursor_store.set(parsed.resolved);

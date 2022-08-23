@@ -11,7 +11,6 @@ pub enum Error {
     JoinError(tokio::task::JoinError),
     SqlxError(sqlx::Error),
     VarError(std::env::VarError),
-    // NoneError(std::option::NoneError),
     SerdeJsonError(serde_json::Error),
     SetLoggerError(tracing::log::SetLoggerError),
     SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>)
