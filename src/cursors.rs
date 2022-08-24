@@ -1,7 +1,11 @@
 use std::string::String;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
+use log::error;
 use sqlx::{postgres::PgPool};
+use sqlx::Row;
+
 
 use crate::Error;
 
@@ -13,41 +17,42 @@ pub trait CursorStore {
 
 pub struct CrdbCursorStore {
     pool: PgPool,
+    key: String,
 }
 
 impl CrdbCursorStore {
-    pub async fn new(pool: PgPool) -> Result<Self, Error> {
+    pub async fn new(pool: PgPool, key: String) -> Result<Self, Error> {
         let _ = sqlx::query("CREATE TABLE IF NOT EXISTS cursor_store (key STRING NOT NULL PRIMARY KEY, cursor STRING NOT NULL);").execute(&pool).await?;
 
-        Ok(Self { pool: pool })
+        Ok(Self { pool, key })
     }
 }
 
 #[async_trait]
 impl CursorStore for CrdbCursorStore {
     async fn get(&self) -> Result<Option<String>, Error> {
-        // let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = 'key';");
-        // let mut fetched = query.fetch(&self.pool);
-        //
-        // let row = match fetched.next().await.unwrap() {
-        //     Ok(v) => v,
-        //     Err(e) => return Err(Error::SqlxError(e)),
-        // };
+        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = '$1';")
+            .bind(&self.key);
+        let mut fetched = query.fetch(&self.pool);
 
-        // match row {
-        //     Some(v) => {
-        //         let s: String = v.get(0);
-        //         Ok(Some(s))
-        //     }
-        //     None => Ok(None),
-        // }
-        Ok(None)
+        let row = match fetched.next().await {
+            Some(Ok(v)) => v,
+            Some(Err(v)) => {
+                error!("{:?}",v);
+                return Ok(None);
+            }
+            None => return Ok(None)
+        };
+
+        let value: String = row.get(0);
+        Ok(Some(value))
     }
 
     async fn set(&self, cursor: String) -> Result<(), Error> {
         let result = sqlx::query(&format!(
-            "UPSERT INTO cursor_store (key, cursor) VALUES ('key', $1);"
+            "UPSERT INTO cursor_store (key, cursor) VALUES ($1, $2);"
         ))
+        .bind(&self.key)
         .bind(cursor)
         .execute(&self.pool)
         .await;

@@ -90,7 +90,7 @@ async fn main() -> Result<(), Error> {
     let pool = PgPool::connect(&database_url).await?;
 
     let cursor_store: CursorStore = match cursor_store_value {
-        CursorStoreType::CockroachDB => Arc::new(CrdbCursorStore::new(pool.clone()).await?),
+        CursorStoreType::CockroachDB => Arc::new(CrdbCursorStore::new(pool.clone(), table_value.to_string()).await?),
     };
 
     // begin processing cockroachdb changefeeds

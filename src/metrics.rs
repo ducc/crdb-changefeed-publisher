@@ -1,7 +1,11 @@
 use std::{convert::Infallible, net::SocketAddr, str::from_utf8, vec::Vec};
 
 use lazy_static::lazy_static;
-use prometheus::{self, Encoder, IntCounter, register_int_counter, TextEncoder};
+use prometheus::{self, Encoder, IntCounter, register, register_int_counter, TextEncoder};
+
+#[cfg(all(target_os = "linux"))]
+use prometheus::process_collector::ProcessCollector;
+
 use warp::Filter;
 
 use crate::Error;
@@ -25,6 +29,9 @@ lazy_static! {
 }
 
 pub async fn run_warp(prom_addr: SocketAddr) -> Result<(), Error> {
+    #[cfg(all(target_os = "linux"))]
+    register(Box::new(ProcessCollector::for_self()))?;
+    
     let exporter = warp::path!("metrics").and_then(serve_metrics);
     warp::serve(exporter).run(prom_addr).await;
     Ok(())
