@@ -31,7 +31,7 @@ impl CrdbCursorStore {
 #[async_trait]
 impl CursorStore for CrdbCursorStore {
     async fn get(&self) -> Result<Option<String>, Error> {
-        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = '$1';")
+        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = $1;")
             .bind(&self.key);
         let mut fetched = query.fetch(&self.pool);
 
