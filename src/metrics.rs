@@ -11,8 +11,17 @@ lazy_static! {
     pub static ref RABBITMQ_MESSAGES_SENT_COUNTER: IntCounter = register_int_counter!(
         "rabbitmq_messages_sent",
         "Number of messages sent to RabbitMQ"
-    )
-    .unwrap();
+    ).unwrap();
+
+    pub static ref TOTAL_BYTES_PROCESSED: IntCounter = register_int_counter!(
+        "total_bytes_processed",
+        "Total bytes sent to downstream sync"
+    ).unwrap();
+
+    pub static ref TOTAL_MESSAGES_PROCESSED: IntCounter = register_int_counter!(
+        "total_messages_processed",
+        "Total number of messages processed"
+    ).unwrap();
 }
 
 pub async fn run_warp(prom_addr: SocketAddr) -> Result<(), Error> {

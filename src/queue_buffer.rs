@@ -1,4 +1,5 @@
 use crate::{ChangePayload, Error, MessageQueue};
+use crate::metrics::{TOTAL_BYTES_PROCESSED, TOTAL_MESSAGES_PROCESSED};
 
 impl QueueBuffer {
     pub fn new(queue: MessageQueue, max_size: usize) -> QueueBuffer {
@@ -25,7 +26,12 @@ impl QueueBuffer {
         }
 
         let content = serde_json::to_string(&self.buffer)?;
-        let publish_result = self.queue.publish(content.into_bytes()).await;
+        let bytes = content.into_bytes();
+        let size: u64 = bytes.len() as u64;
+        let publish_result = self.queue.publish(bytes).await;
+
+        TOTAL_BYTES_PROCESSED.inc_by(size);
+        TOTAL_MESSAGES_PROCESSED.inc_by(self.buffer.len() as u64);
 
         self.buffer.clear();
         return publish_result;
