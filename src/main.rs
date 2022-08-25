@@ -5,7 +5,6 @@ use std::panic::panic_any;
 
 use clap::{App, load_yaml};
 use futures_util::StreamExt;
-use prometheus::register;
 use regex::Regex;
 use sqlx::{Pool, Postgres, postgres::PgPool, prelude::*};
 use tracing::{debug, error};
@@ -19,6 +18,7 @@ use model::{
     QueueType,
 };
 use queues::RabbitMQ;
+use crate::queues::{SQSQueue, StdoutDump};
 
 mod cursors;
 mod error;
