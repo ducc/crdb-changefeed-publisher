@@ -12,7 +12,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use cursors::CrdbCursorStore;
 use error::Error;
-use metrics::{RABBITMQ_MESSAGES_SENT_COUNTER, run_warp};
+use metrics::{ run_warp};
 use model::{
     Change, ChangeCursor, ChangePayload, ChangeRow, CursorStoreType, JsonCursor, ProcessedChange,
     QueueType,

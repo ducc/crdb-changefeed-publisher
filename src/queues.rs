@@ -10,7 +10,6 @@ use lapin::{
 use tokio_amqp::LapinTokioExt;
 
 use crate::Error;
-use crate::RABBITMQ_MESSAGES_SENT_COUNTER;
 
 #[async_trait]
 pub trait MessageQueue {
@@ -71,7 +70,7 @@ impl MessageQueue for RabbitMQ {
             .await?
             .await;
 
-        RABBITMQ_MESSAGES_SENT_COUNTER.inc();
+        // RABBITMQ_MESSAGES_SENT_COUNTER.inc();
 
         match publish_result {
             Ok(_) => Ok(()),

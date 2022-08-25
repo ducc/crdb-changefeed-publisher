@@ -12,10 +12,10 @@ use crate::Error;
 
 // initialize the prometheus metrics
 lazy_static! {
-    pub static ref RABBITMQ_MESSAGES_SENT_COUNTER: IntCounter = register_int_counter!(
-        "rabbitmq_messages_sent",
-        "Number of messages sent to RabbitMQ"
-    ).unwrap();
+    // pub static ref RABBITMQ_MESSAGES_SENT_COUNTER: IntCounter = register_int_counter!(
+    //     "rabbitmq_messages_sent",
+    //     "Number of messages sent to RabbitMQ"
+    // ).unwrap();
 
     pub static ref TOTAL_BYTES_PROCESSED: IntCounter = register_int_counter!(
         "total_bytes_processed",
