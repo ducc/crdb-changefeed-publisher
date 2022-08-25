@@ -29,9 +29,6 @@ lazy_static! {
 }
 
 pub async fn run_warp(prom_addr: SocketAddr) -> Result<(), Error> {
-    #[cfg(all(target_os = "linux"))]
-    register(Box::new(ProcessCollector::for_self()))?;
-    
     let exporter = warp::path!("metrics").and_then(serve_metrics);
     warp::serve(exporter).run(prom_addr).await;
     Ok(())
