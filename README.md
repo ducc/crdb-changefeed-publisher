@@ -6,6 +6,7 @@ This app utilises [Core changefeeds](https://www.cockroachlabs.com/docs/stable/c
 
 ## Supported messages queues
 - RabbitMQ
+- SQS
 
 ## Supported cursor stores
 - CockroachDB
@@ -40,14 +41,8 @@ Published message:
 ## Install
 Tested on Rust version `1.46.0-nightly (346aec9b0 2020-07-11)`.
 
-### Docker
-`docker run duccos/crdb-changefeed-publisher:latest`
-
-### Kubernetes
-Example deployments can be found in the [.kube directory](https://github.com/ducc/crdb-changefeed-publisher/tree/master/.kube).
-
 ### From source
-1. `git clone git@github.com:ducc/crdb-changefeed-publisher.git`
+1. `git clone git@github.com:nRFCloud/crdb-changefeed-publisher.git`
 1. `cd crdb-changefeed-publisher`
 1. `cargo build --release`
 1. `{environment vars} target/release/crdb-changefeed-publisher`
@@ -65,18 +60,22 @@ Example deployments can be found in the [.kube directory](https://github.com/duc
 
 ### Environment variables
 | Variable        | Help                            | Options                                 | Default      |
-| --------------- | ------------------------------- | --------------------------------------- | ------------ |
+|-----------------|---------------------------------| --------------------------------------- | ------------ |
 | RUST_LOG        | Logging level                   | trace, debug, info, error               | info         |
 | PROMETHEUS_ADDR | Adress of the promethues server | ip:port                                 | 0.0.0.0:8001 |
 | DATABASE_URL    | URL of the cockroachdb server   | postgresql://user:pass@ip:port/database |              |
 | AMQP_ADDR       | RabbitMQ server address         | amqp://ip:port                          |              |
 | AMQP_QUEUE      | RabbitMQ queue topic name       | e.g. changes                            |              |
+| SQS_QUEUE_URL   | SQS Queue URL                   |                                         |              |
 
 ## Metrics
 Prometheus metrics are exposed on the PROMETHEUS_ADDR env var address at /metrics.
-| Metric                 | Type    |
-| ---------------------- | ------- |
-| rabbitmq_messages_sent | Counter |
+
+| Metric                   | Type    |
+|--------------------------|---------|
+| total_bytes_processed    | Counter |
+| total_messages_processed | Counter |
+
 
 ## License
 Licensed under MIT. See the LICENSE file in the repository root for the full text.
