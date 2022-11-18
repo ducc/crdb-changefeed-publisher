@@ -1,11 +1,11 @@
-use std::io::Write;
 use async_trait::async_trait;
-use tracing::{debug};
+use std::io::Write;
+use tracing::debug;
 
 use lapin::{
-    BasicProperties,
-    Channel,
-    Connection, ConnectionProperties, options::{BasicPublishOptions, QueueDeclareOptions}, types::FieldTable,
+    options::{BasicPublishOptions, QueueDeclareOptions},
+    types::FieldTable,
+    BasicProperties, Channel, Connection, ConnectionProperties,
 };
 use tokio_amqp::LapinTokioExt;
 
@@ -81,7 +81,7 @@ impl MessageQueue for RabbitMQ {
 
 pub struct SQSQueue {
     queue_url: String,
-    client: aws_sdk_sqs::Client
+    client: aws_sdk_sqs::Client,
 }
 
 impl SQSQueue {
@@ -89,10 +89,7 @@ impl SQSQueue {
         let config = aws_config::load_from_env().await;
         let client = aws_sdk_sqs::Client::new(&config);
 
-        Ok(SQSQueue {
-            queue_url,
-            client
-        })
+        Ok(SQSQueue { queue_url, client })
     }
 }
 
@@ -101,10 +98,12 @@ impl MessageQueue for SQSQueue {
     async fn publish(&self, data: Vec<u8>) -> Result<(), Error> {
         debug!("Publishing to sqs");
 
-        self.client.send_message()
+        self.client
+            .send_message()
             .queue_url(&self.queue_url)
             .message_body(std::str::from_utf8(&data)?)
-            .send().await?;
+            .send()
+            .await?;
 
         Ok(())
     }

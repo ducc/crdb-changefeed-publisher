@@ -1,7 +1,7 @@
 use std::{convert::Infallible, net::SocketAddr, str::from_utf8, vec::Vec};
 
 use lazy_static::lazy_static;
-use prometheus::{self, Encoder, IntCounter, register_int_counter, TextEncoder};
+use prometheus::{self, register_int_counter, Encoder, IntCounter, TextEncoder};
 
 #[cfg(all(target_os = "linux"))]
 use prometheus::process_collector::ProcessCollector;
@@ -15,12 +15,13 @@ lazy_static! {
     pub static ref TOTAL_BYTES_PROCESSED: IntCounter = register_int_counter!(
         "total_bytes_processed",
         "Total bytes sent to downstream sync"
-    ).unwrap();
-
+    )
+    .unwrap();
     pub static ref TOTAL_MESSAGES_PROCESSED: IntCounter = register_int_counter!(
         "total_messages_processed",
         "Total number of messages processed"
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 pub async fn run_warp(prom_addr: SocketAddr) -> Result<(), Error> {

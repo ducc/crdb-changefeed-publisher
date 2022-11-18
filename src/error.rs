@@ -13,7 +13,7 @@ pub enum Error {
     VarError(std::env::VarError),
     SerdeJsonError(serde_json::Error),
     SetLoggerError(tracing::log::SetLoggerError),
-    SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>)
+    SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>),
 }
 
 impl From<std::io::Error> for Error {
@@ -83,5 +83,7 @@ impl From<tracing::log::SetLoggerError> for Error {
 }
 
 impl From<aws_smithy_http::result::SdkError<SendMessageError>> for Error {
-    fn from(e: aws_smithy_http::result::SdkError<SendMessageError>) -> Error { Error::SendMessageError(e)}
+    fn from(e: aws_smithy_http::result::SdkError<SendMessageError>) -> Error {
+        Error::SendMessageError(e)
+    }
 }

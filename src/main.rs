@@ -1,31 +1,31 @@
 #![feature(async_closure)]
 
-use std::{net::SocketAddr, string::String, sync::Arc};
 use std::panic::panic_any;
+use std::{net::SocketAddr, string::String, sync::Arc};
 
-use clap::{App, load_yaml};
+use clap::{load_yaml, App};
 use futures_util::StreamExt;
 use regex::Regex;
-use sqlx::{Pool, Postgres, postgres::PgPool, prelude::*};
+use sqlx::{postgres::PgPool, prelude::*, Pool, Postgres};
 use tracing::{debug, error};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+use crate::queues::{SQSQueue, StdoutDump};
 use cursors::CrdbCursorStore;
 use error::Error;
-use metrics::{ run_warp};
+use metrics::run_warp;
 use model::{
     Change, ChangeCursor, ChangePayload, ChangeRow, CursorStoreType, JsonCursor, ProcessedChange,
     QueueType,
 };
 use queues::RabbitMQ;
-use crate::queues::{SQSQueue, StdoutDump};
 
 mod cursors;
 mod error;
 mod metrics;
 mod model;
-mod queues;
 mod queue_buffer;
+mod queues;
 
 type MessageQueue = Arc<dyn queues::MessageQueue + Send + Sync>;
 type CursorStore = Arc<dyn cursors::CursorStore + Send + Sync>;
@@ -89,7 +89,9 @@ async fn main() -> Result<(), Error> {
     let pool = PgPool::connect(&database_url).await?;
 
     let cursor_store: CursorStore = match cursor_store_value {
-        CursorStoreType::CockroachDB => Arc::new(CrdbCursorStore::new(pool.clone(), table_value.to_string()).await?),
+        CursorStoreType::CockroachDB => {
+            Arc::new(CrdbCursorStore::new(pool.clone(), table_value.to_string()).await?)
+        }
     };
 
     // begin processing cockroachdb changefeeds
@@ -124,7 +126,7 @@ fn build_changefeed_query(
     cursor: Option<String>,
 ) -> String {
     let mut query = format!(
-        "EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}'",
+        "EXPERIMENTAL CHANGEFEED FOR {} WITH resolved = '{}', updated, mvcc_timestamp",
         table_name, cursor_frequency_value
     );
 
@@ -182,7 +184,7 @@ async fn process_changefeed(
             Ok(_) => {
                 println!("Query exiting early for some reason");
                 RetryReason::None
-            },
+            }
             Err(e) => {
                 error!("error executing changefeed: {:?}", &e);
                 should_retry(e)

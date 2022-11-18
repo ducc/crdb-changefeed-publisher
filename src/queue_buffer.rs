@@ -1,12 +1,12 @@
-use crate::{ChangePayload, Error, MessageQueue};
 use crate::metrics::{TOTAL_BYTES_PROCESSED, TOTAL_MESSAGES_PROCESSED};
+use crate::{ChangePayload, Error, MessageQueue};
 
 impl QueueBuffer {
     pub fn new(queue: MessageQueue, max_size: usize) -> QueueBuffer {
         QueueBuffer {
             max_size,
             buffer: Vec::new(),
-            queue
+            queue,
         }
     }
 
@@ -22,7 +22,7 @@ impl QueueBuffer {
 
     pub async fn flush(&mut self) -> Result<(), Error> {
         if self.buffer.len() == 0 {
-            return Ok(())
+            return Ok(());
         }
 
         let content = serde_json::to_string(&self.buffer)?;
@@ -41,5 +41,5 @@ impl QueueBuffer {
 pub struct QueueBuffer {
     max_size: usize,
     queue: MessageQueue,
-    buffer: Vec<ChangePayload>
+    buffer: Vec<ChangePayload>,
 }

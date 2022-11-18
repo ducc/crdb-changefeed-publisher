@@ -6,7 +6,7 @@ use crate::Error;
 pub enum QueueType {
     RabbitMQ,
     Stdout,
-    SQS
+    SQS,
 }
 
 impl QueueType {
@@ -72,18 +72,15 @@ pub struct JsonCursor {
 #[derive(Serialize)]
 pub struct ChangePayload {
     pub table: String,
-    pub key: String,
+    pub key: Box<RawValue>,
     pub value: Box<RawValue>,
 }
 
 impl ChangePayload {
     pub fn new(table: String, key: String, value: String) -> Result<Self, Error> {
         let value = RawValue::from_string(value)?;
-        Ok(Self {
-            table: table,
-            key: key,
-            value: value,
-        })
+        let key = RawValue::from_string(key)?;
+        Ok(Self { key, value, table })
     }
 }
 

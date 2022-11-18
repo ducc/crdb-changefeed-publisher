@@ -3,9 +3,8 @@ use std::string::String;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use log::error;
-use sqlx::{postgres::PgPool};
+use sqlx::postgres::PgPool;
 use sqlx::Row;
-
 
 use crate::Error;
 
@@ -31,17 +30,16 @@ impl CrdbCursorStore {
 #[async_trait]
 impl CursorStore for CrdbCursorStore {
     async fn get(&self) -> Result<Option<String>, Error> {
-        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = $1;")
-            .bind(&self.key);
+        let query = sqlx::query("SELECT cursor FROM cursor_store WHERE key = $1;").bind(&self.key);
         let mut fetched = query.fetch(&self.pool);
 
         let row = match fetched.next().await {
             Some(Ok(v)) => v,
             Some(Err(v)) => {
-                error!("{:?}",v);
+                error!("{:?}", v);
                 return Ok(None);
             }
-            None => return Ok(None)
+            None => return Ok(None),
         };
 
         let value: String = row.get(0);
