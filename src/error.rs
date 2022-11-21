@@ -14,6 +14,8 @@ pub enum Error {
     SerdeJsonError(serde_json::Error),
     SetLoggerError(tracing::log::SetLoggerError),
     SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>),
+    MigrateError(sqlx::migrate::MigrateError),
+    NotFound(),
 }
 
 impl From<std::io::Error> for Error {
@@ -37,6 +39,12 @@ impl From<prometheus::Error> for Error {
 impl From<warp::Error> for Error {
     fn from(e: warp::Error) -> Error {
         Error::WarpError(e)
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for Error {
+    fn from(e: sqlx::migrate::MigrateError) -> Error {
+        Error::MigrateError(e)
     }
 }
 

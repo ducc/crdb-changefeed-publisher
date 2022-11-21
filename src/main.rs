@@ -5,10 +5,12 @@ use std::{net::SocketAddr, string::String, sync::Arc};
 
 use clap::{load_yaml, App};
 use futures_util::StreamExt;
-use regex::Regex;
-use sqlx::{postgres::PgPool, prelude::*, Pool, Postgres};
+use log::{info, warn};
+use sqlx::pool::PoolConnection;
+use sqlx::{postgres::PgPool, prelude::*, PgConnection, Pool, Postgres};
 use tracing::{debug, error};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use uuid::Uuid;
 
 use crate::queues::{SQSQueue, StdoutDump};
 use cursors::CrdbCursorStore;
@@ -61,8 +63,10 @@ async fn main() -> Result<(), Error> {
     // get the environment variables
     let prom_addr_raw = std::env::var("PROMETHEUS_ADDR").unwrap_or_else(|_| "0.0.0.0:8001".into());
     let database_url = std::env::var("DATABASE_URL").expect("database url is required");
-    // let database_user = std::env::var("DATABASE_USER").expect("database username is required");
-    // let database_password = std::env::var("DATABASE_PASSWORD").expect("database password is required");
+    let changefeed_id =
+        std::env::var("CHANGEFEED_ID").unwrap_or_else(|_| Uuid::new_v4().to_string());
+
+    info!("Preparting to start changefeed '{}'", changefeed_id);
 
     // start the prometheus server
     let prom_addr: SocketAddr = prom_addr_raw
@@ -90,7 +94,7 @@ async fn main() -> Result<(), Error> {
 
     let cursor_store: CursorStore = match cursor_store_value {
         CursorStoreType::CockroachDB => {
-            Arc::new(CrdbCursorStore::new(pool.clone(), table_value.to_string()).await?)
+            Arc::new(CrdbCursorStore::new(pool.clone(), changefeed_id.to_string()).await?)
         }
     };
 
@@ -192,34 +196,49 @@ async fn process_changefeed(
         };
 
         match retry {
-            RetryReason::InvalidCursor => ignore_cursor = true,
+            RetryReason::InvalidCursor => {
+                warn!("Existing changefeed cursor is outside the table gc window. Data loss is highly likely!");
+                ignore_cursor = true;
+            }
             RetryReason::None => {
                 break;
             }
+            _ => continue,
         }
     }
 }
 
 enum RetryReason {
     InvalidCursor,
+    ServerDisconnect,
     None,
 }
 
 fn should_retry(e: Error) -> RetryReason {
-    if let Error::SqlxError(v) = e {
-        if let sqlx::Error::Database(dbe) = v {
-            // e.g. batch timestamp 1595866288.020022200,0 must be after replica GC threshold 1595868416.278231500,0
-            let re = Regex::new(
-                r#"^batch timestamp [0-9.,]* must be after replica GC threshold [0-9.,]*$"#,
-            )
-            .unwrap();
-            if re.is_match(dbe.message()) {
-                return RetryReason::InvalidCursor;
+    match e {
+        Error::SqlxError(sqlx::Error::Database(dbe)) => match dbe {
+            e if e.message().contains("must be after replica GC threshold") => {
+                RetryReason::InvalidCursor
             }
-        }
+            _ => RetryReason::None,
+        },
+        Error::SqlxError(sqlx::Error::Io(ioe)) => match ioe.kind() {
+            std::io::ErrorKind::UnexpectedEof => RetryReason::ServerDisconnect,
+            std::io::ErrorKind::BrokenPipe => RetryReason::ServerDisconnect,
+            _ => RetryReason::None,
+        },
+        _ => RetryReason::None,
     }
+}
 
-    RetryReason::None
+async fn get_node_for_connection(con: &mut PgConnection) -> Result<String, Error> {
+    let result = sqlx::query("SHOW node_id;").fetch_one(con).await?;
+    let node_id: Option<&str> = result.try_get(0)?;
+
+    match node_id {
+        Some(id) => Ok(id.into()),
+        None => Err(Error::NotFound()),
+    }
 }
 
 async fn execute_changefeed(
@@ -228,7 +247,12 @@ async fn execute_changefeed(
     message_queue: MessageQueue,
     cursor_store: CursorStore,
 ) -> Result<(), Error> {
-    let mut cursor = sqlx::query(&query).fetch(&pool);
+    let mut con = pool.acquire().await?;
+
+    let node_id = get_node_for_connection(&mut *con).await?;
+    info!("Starting changefeed against node: {}", node_id);
+
+    let mut cursor = sqlx::query(&query).fetch(&mut *con);
     let mut buffer = queue_buffer::QueueBuffer::new(message_queue, 100);
 
     while let Some(row) = cursor.next().await {

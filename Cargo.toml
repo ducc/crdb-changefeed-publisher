@@ -20,7 +20,7 @@ prometheus = {version = "0.13.1", features= ["process"]}
 lazy_static = "1.4.0"
 prometheus_exporter = "0.8.4"
 warp = "0.3.2"
-sqlx = { version = "0.6.1", default_features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "time", "bigdecimal", "json", "macros"] }
+sqlx = { version = "0.6.1", default_features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "time", "bigdecimal", "json", "macros", "migrate"] }
 serde_json = "1.0"
 serde = "1.0"
 futures = "0.3.5"
@@ -29,6 +29,7 @@ clap = { version = "2.33", features = ["yaml"] }
 regex = "1"
 aws-sdk-sqs = "0.17.0"
 aws-config = "0.47.0"
+uuid = {version = "1.2.2", features = ["v4"]}
 aws-smithy-http = "0.47.0"
 
 [patch]
