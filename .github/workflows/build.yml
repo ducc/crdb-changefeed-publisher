@@ -8,6 +8,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
+          toolchain: nightly-2022-08-19
           components: rustfmt, clippy
       - name: Lint
         run: cargo clippy
