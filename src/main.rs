@@ -216,10 +216,17 @@ enum RetryReason {
 
 fn should_retry(e: Error) -> RetryReason {
     match e {
-        Error::SqlxError(sqlx::Error::Database(dbe)) => match dbe {
-            e if e.message().contains("must be after replica GC threshold") => {
-                RetryReason::InvalidCursor
-            }
+        Error::SqlxError(sqlx::Error::Database(dbe)) => match dbe.code() {
+            Some(e) => match e.to_string().as_str() {
+                "57014" => RetryReason::ServerDisconnect,
+                "XXUUU" => match dbe {
+                    e if dbe.message().contains("must be after replica GC threshold") => {
+                        RetryReason::InvalidCursor
+                    }
+                    _ => RetryReason::None,
+                },
+                _ => RetryReason::None,
+            },
             _ => RetryReason::None,
         },
         Error::SqlxError(sqlx::Error::Io(ioe)) => match ioe.kind() {
