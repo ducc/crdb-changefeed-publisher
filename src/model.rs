@@ -4,17 +4,15 @@ use serde_json::value::RawValue;
 use crate::Error;
 
 pub enum QueueType {
-    RabbitMQ,
     Stdout,
-    SQS,
+    Sqs,
 }
 
 impl QueueType {
     pub fn from_name(name: &str) -> Option<QueueType> {
         match name {
-            "rabbitmq" => Some(QueueType::RabbitMQ),
             "stdout" => Some(QueueType::Stdout),
-            "sqs" => Some(QueueType::SQS),
+            "sqs" => Some(QueueType::Sqs),
             _ => None,
         }
     }
@@ -55,7 +53,7 @@ pub struct ChangeCursor {
 
 impl ChangeCursor {
     pub fn new(cursor: String) -> Self {
-        Self { cursor: cursor }
+        Self { cursor }
     }
 }
 

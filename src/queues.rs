@@ -29,6 +29,7 @@ impl MessageQueue for StdoutDump {
     }
 }
 
+// FIXME: RabbitMQ is currently untested and unused
 pub struct RabbitMQ {
     channel: Channel,
     queue_name: String,

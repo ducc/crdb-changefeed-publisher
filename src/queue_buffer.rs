@@ -21,7 +21,7 @@ impl QueueBuffer {
     }
 
     pub async fn flush(&mut self) -> Result<(), Error> {
-        if self.buffer.len() == 0 {
+        if self.buffer.is_empty() {
             return Ok(());
         }
 
@@ -34,7 +34,7 @@ impl QueueBuffer {
         TOTAL_MESSAGES_PROCESSED.inc_by(self.buffer.len() as u64);
 
         self.buffer.clear();
-        return publish_result;
+        publish_result
     }
 }
 

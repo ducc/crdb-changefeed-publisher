@@ -1,6 +1,7 @@
 use aws_sdk_sqs::error::SendMessageError;
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     IoError(std::io::Error),
     Utf8Error(std::str::Utf8Error),
@@ -12,8 +13,8 @@ pub enum Error {
     SqlxError(sqlx::Error),
     VarError(std::env::VarError),
     SerdeJsonError(serde_json::Error),
-    SetLoggerError(tracing::log::SetLoggerError),
-    SendMessageError(aws_smithy_http::result::SdkError<SendMessageError>),
+    SetLoggerError(log::SetLoggerError),
+    SendMessageError(Box<aws_smithy_http::result::SdkError<SendMessageError>>),
     MigrateError(sqlx::migrate::MigrateError),
     NotFound(),
 }
@@ -84,14 +85,14 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl From<tracing::log::SetLoggerError> for Error {
-    fn from(e: tracing::log::SetLoggerError) -> Error {
+impl From<log::SetLoggerError> for Error {
+    fn from(e: log::SetLoggerError) -> Error {
         Error::SetLoggerError(e)
     }
 }
 
 impl From<aws_smithy_http::result::SdkError<SendMessageError>> for Error {
     fn from(e: aws_smithy_http::result::SdkError<SendMessageError>) -> Error {
-        Error::SendMessageError(e)
+        Error::SendMessageError(Box::new(e))
     }
 }

@@ -6,7 +6,6 @@ use std::{net::SocketAddr, string::String, sync::Arc};
 use clap::{load_yaml, App};
 use futures_util::StreamExt;
 use log::{info, warn};
-use sqlx::pool::PoolConnection;
 use sqlx::{postgres::PgPool, prelude::*, PgConnection, Pool, Postgres};
 use tracing::{debug, error};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -75,14 +74,8 @@ async fn main() -> Result<(), Error> {
     let warp_handle = tokio::spawn(run_warp(prom_addr));
 
     let message_queue: MessageQueue = match queue_value {
-        QueueType::RabbitMQ => {
-            let mq_addr = std::env::var("AMQP_ADDR").expect("amqp addr is required");
-            let queue_name = std::env::var("AMQP_QUEUE").expect("queue name is required");
-            let message_queue = Arc::new(RabbitMQ::new(mq_addr, queue_name).await?);
-            message_queue
-        }
         QueueType::Stdout => Arc::new(StdoutDump {}),
-        QueueType::SQS => {
+        QueueType::Sqs => {
             let queue_url = std::env::var("SQS_QUEUE_URL").expect("SQS queue url is required");
             Arc::new(SQSQueue::new(queue_url).await?)
         }
@@ -220,7 +213,7 @@ fn should_retry(e: Error) -> RetryReason {
             Some(e) => match e.to_string().as_str() {
                 "57014" => RetryReason::ServerDisconnect,
                 "XXUUU" => match dbe {
-                    e if dbe.message().contains("must be after replica GC threshold") => {
+                    _ if dbe.message().contains("must be after replica GC threshold") => {
                         RetryReason::InvalidCursor
                     }
                     _ => RetryReason::None,
