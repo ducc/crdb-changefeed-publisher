@@ -1,9 +1,20 @@
+use assert_cmd::cargo::cargo_bin;
+use aws_sdk_sqs::{Credentials, Region};
+use aws_smithy_http::endpoint::Endpoint;
 use dockertest::waitfor::{MessageSource, MessageWait};
 use dockertest::{
     Composition, DockerOperations, DockerTest, Image, PullPolicy, Source, StartPolicy,
 };
+use http::Uri;
+use portpicker::pick_unused_port;
+use rexpect::session::spawn_command;
 use sqlx::{PgPool, Pool, Postgres};
+use std::process::Command;
+use std::str::FromStr;
 use test_log::test;
+use tracing::{debug, info};
+use uuid::Uuid;
+use warp::http;
 
 const COCKROACH_HANDLE: &str = "cockroach";
 
@@ -41,7 +52,7 @@ fn create_sqs_comp() -> Composition {
         .with_start_policy(StartPolicy::Strict)
         .with_wait_for(Box::new(MessageWait {
             source: MessageSource::Stdout,
-            timeout: 30,
+            timeout: 60,
             message: "Started SQS rest server".into(),
         }));
 
@@ -59,15 +70,90 @@ fn create_test_enviroment() -> DockerTest {
     test
 }
 
-async fn get_sqlx_pool(ops: &DockerOperations) -> Pool<Postgres> {
+async fn get_sqlx_pool(ops: &DockerOperations) -> (String, Pool<Postgres>) {
     let cockroach_handle = ops.handle(COCKROACH_HANDLE);
     let host_port = cockroach_handle.host_port_unchecked(26257);
     let db_url = format!(
-        "postgresql://root@localhost:{}/defaultdb?sslmode=disable",
-        host_port.1
+        "postgresql://root@{}:{}/defaultdb?sslmode=disable",
+        host_port.0, host_port.1
     );
 
-    PgPool::connect(db_url.as_str()).await.unwrap()
+    (
+        db_url.to_string(),
+        PgPool::connect(db_url.as_str()).await.unwrap(),
+    )
+}
+
+async fn get_sqs_sdk(ops: &DockerOperations) -> (String, aws_sdk_sqs::Client) {
+    let sqs_handle = ops.handle(SQS_HANDLE);
+    let host_port = sqs_handle.host_port_unchecked(9324);
+    let sqs_url = format!("http://{}:{}", host_port.0, host_port.1);
+
+    let config = aws_config::from_env()
+        .endpoint_resolver(Endpoint::immutable(
+            Uri::from_str(sqs_url.as_str()).unwrap(),
+        ))
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new("test", "test", None, None, "test"));
+    let config = config.load().await;
+
+    (sqs_url, aws_sdk_sqs::Client::new(&config))
+}
+
+async fn create_test_queue(sdk: &aws_sdk_sqs::Client) -> String {
+    let create_queue_response = sdk
+        .create_queue()
+        .queue_name("test-queue")
+        .send()
+        .await
+        .unwrap();
+
+    create_queue_response.queue_url.unwrap()
+}
+
+fn streamer_cmd(
+    db_url: &str,
+    queue_url: &str,
+    changefeed_id: &str,
+    table_name: &str,
+    sqs_url: &str,
+) -> Command {
+    let exec = cargo_bin("crdb-changefeed-publisher")
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    // let cmd = format!("{} --queue sqs --table {}", exec, table_name);
+    let mut cmd = Command::new(exec);
+    let prom_addr = format!("0.0.0.0:{}", pick_unused_port().unwrap());
+
+    cmd.env("DATABASE_URL", db_url)
+        .env("SQS_QUEUE_URL", queue_url)
+        .env("CHANGEFEED_ID", changefeed_id)
+        .env("PROMETHEUS_ADDR", prom_addr)
+        .env("AWS_REGION", "us-east-1")
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_SQS_ENDPOINT", sqs_url)
+        .arg("--queue")
+        .arg("sqs")
+        .arg("--table")
+        .arg(table_name);
+
+    cmd
+}
+
+struct TestValue {
+    key: String,
+    value: String,
+}
+
+impl Default for TestValue {
+    fn default() -> Self {
+        Self {
+            key: Uuid::new_v4().to_string(),
+            value: Uuid::new_v4().to_string(),
+        }
+    }
 }
 
 #[test]
@@ -75,11 +161,56 @@ fn startup_test() {
     let test = create_test_enviroment();
 
     test.run(|ops| async move {
-        let sql_pool = get_sqlx_pool(&ops).await;
+        let (db_url, sql_pool) = get_sqlx_pool(&ops).await;
 
         sqlx::query("CREATE TABLE IF NOT EXISTS test_table (key STRING NOT NULL PRIMARY KEY, value STRING NOT NULL);")
             .execute(&sql_pool)
             .await
             .unwrap();
+
+        sqlx::query("SET cluster setting kv.rangefeed.enabled=true;")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
+        let queue_url = create_test_queue(&sdk).await;
+
+        info!("Queue URL: {}", queue_url);
+
+        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+
+        shell.exp_string("Starting changefeed against node:").unwrap();
+
+
+        for _ in 0..10 {
+            let test_value = TestValue::default();
+            sqlx::query("INSERT INTO test_table (key, value) VALUES ($1, $2)")
+                .bind(&test_value.key)
+                .bind(&test_value.value)
+                .execute(&sql_pool)
+                .await
+                .unwrap();
+        }
+
+        let receive_message_response = sdk
+            .receive_message()
+            .queue_url(queue_url)
+            .max_number_of_messages(10)
+            .wait_time_seconds(15)
+            .send()
+            .await
+            .unwrap();
+
+        let mut messages = receive_message_response.messages.unwrap();
+
+        assert_eq!(messages.len(), 1);
+        let content = messages.pop().unwrap().body.unwrap();
+        let parsed_content: serde_json::Value = serde_json::from_str(content.as_str()).unwrap();
+        let content_set = parsed_content.as_array().unwrap();
+
+        debug!("Parsed content: {:?}", parsed_content);
+        assert_eq!(content_set.len(), 10);
     })
 }

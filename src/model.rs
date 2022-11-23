@@ -39,11 +39,7 @@ pub struct ChangeRow {
 
 impl ChangeRow {
     pub fn new(table: String, key: String, value: String) -> Self {
-        Self {
-            table: table,
-            key: key,
-            value: value,
-        }
+        Self { table, key, value }
     }
 }
 
@@ -67,7 +63,7 @@ pub struct JsonCursor {
     pub resolved: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ChangePayload {
     pub table: String,
     pub key: Box<RawValue>,
@@ -90,10 +86,6 @@ pub struct Change<'a> {
 
 impl<'a> Change<'a> {
     pub fn new(table: Option<&'a str>, key: Option<Vec<u8>>, value: Option<Vec<u8>>) -> Self {
-        Self {
-            table: table,
-            key: key,
-            value: value,
-        }
+        Self { table, key, value }
     }
 }

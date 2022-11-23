@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use aws_smithy_http::endpoint::Endpoint;
 use std::io::Write;
+use std::str::FromStr;
 use tracing::debug;
 
 use lapin::{
@@ -7,14 +9,16 @@ use lapin::{
     types::FieldTable,
     BasicProperties, Channel, Connection, ConnectionProperties,
 };
+use mockall::automock;
 use tokio_amqp::LapinTokioExt;
+use warp::http::Uri;
 
 use crate::Error;
 
+#[automock]
 #[async_trait]
 pub trait MessageQueue {
     async fn publish(&self, data: Vec<u8>) -> Result<(), Error>;
-    // async fn flush(&self) -> Result<(), Error>;
 }
 
 pub struct StdoutDump {}
@@ -87,7 +91,15 @@ pub struct SQSQueue {
 
 impl SQSQueue {
     pub async fn new(queue_url: String) -> Result<Self, Error> {
-        let config = aws_config::load_from_env().await;
+        let mut config_loader = aws_config::from_env();
+
+        if let Ok(sqs_endpoint) = std::env::var("AWS_SQS_ENDPOINT") {
+            config_loader = config_loader.endpoint_resolver(Endpoint::immutable(
+                Uri::from_str(sqs_endpoint.as_str()).unwrap(),
+            ));
+        }
+
+        let config = config_loader.load().await;
         let client = aws_sdk_sqs::Client::new(&config);
 
         Ok(SQSQueue { queue_url, client })
