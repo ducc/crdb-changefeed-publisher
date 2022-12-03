@@ -1,12 +1,16 @@
 #![feature(async_closure)]
 
+use std::borrow::Borrow;
 use std::panic::panic_any;
 use std::{net::SocketAddr, string::String, sync::Arc};
 
 use futures_util::StreamExt;
+use lazy_static::lazy_static;
 use log::{info, warn};
+use sqlx::error::DatabaseError;
 use sqlx::{postgres::PgPool, prelude::*, PgConnection, Pool, Postgres};
 use tracing::{debug, error};
+use tracing_subscriber::fmt::format;
 
 use cursors::CrdbCursorStore;
 use error::Error;
@@ -79,7 +83,7 @@ fn build_changefeed_query(
     if let Some(cursor) = cursor {
         query = format!("{}, cursor = '{}'", query, cursor);
     } else {
-        query = format!("{}, no_initial_scan", query);
+        query = format!("{}, initial_scan", query);
     }
 
     format!("{};", query)
@@ -93,6 +97,7 @@ async fn process_changefeed(
     cursor_frequency_value: String,
 ) {
     let mut ignore_cursor = false;
+    let mut cursor_override: Option<String> = None;
 
     loop {
         let query = {
@@ -100,6 +105,8 @@ async fn process_changefeed(
 
             let cursor_opt = if ignore_cursor {
                 None
+            } else if let Some(cur) = cursor_override.as_ref() {
+                Some(cur.clone())
             } else {
                 match cursor_result.await {
                     Ok(result) => result,
@@ -138,9 +145,22 @@ async fn process_changefeed(
         };
 
         match retry {
-            RetryReason::InvalidCursor => {
+            RetryReason::InvalidCursor(new_cur) => {
                 warn!("Existing changefeed cursor is outside the table gc window. Data loss is highly likely!");
-                ignore_cursor = true;
+                match new_cur {
+                    Some(new_cur) => {
+                        // Add one nanosecond to the cursor to ensure we pass the threshold
+                        let new_cur = new_cur + 1;
+
+                        warn!("Using new cursor: {}", new_cur);
+                        cursor_override = Some(new_cur.to_string());
+                    }
+                    None => {
+                        warn!("No new cursor provided. Ignoring cursor and starting from scratch");
+                        ignore_cursor = true;
+                        cursor_override = None;
+                    }
+                }
             }
             RetryReason::None => {
                 break;
@@ -151,9 +171,28 @@ async fn process_changefeed(
 }
 
 enum RetryReason {
-    InvalidCursor,
+    InvalidCursor(Option<u64>),
     ServerDisconnect,
     None,
+}
+
+fn extract_replica_threshold(err: &dyn DatabaseError) -> Option<u64> {
+    lazy_static! {
+        static ref ER: regex::Regex =
+            regex::Regex::new(r"must be after replica GC threshold ([0-9\.]*?),").unwrap();
+    }
+    let msg = err.message();
+
+    let caps = ER.captures(msg)?;
+
+    if let Some(cap) = caps.get(1) {
+        let cap = cap.as_str().split_once('.')?;
+        let num_str = format!("{}{}", cap.0, cap.1);
+        let num = num_str.parse::<u64>().ok()?;
+        return Some(num);
+    }
+
+    None
 }
 
 fn should_retry(e: Error) -> RetryReason {
@@ -163,7 +202,7 @@ fn should_retry(e: Error) -> RetryReason {
                 "57014" => RetryReason::ServerDisconnect,
                 "XXUUU" => match dbe {
                     _ if dbe.message().contains("must be after replica GC threshold") => {
-                        RetryReason::InvalidCursor
+                        RetryReason::InvalidCursor(extract_replica_threshold(dbe.borrow()))
                     }
                     _ => RetryReason::None,
                 },

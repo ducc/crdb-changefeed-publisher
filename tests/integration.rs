@@ -11,6 +11,8 @@ use rexpect::session::spawn_command;
 use sqlx::{PgPool, Pool, Postgres};
 use std::process::Command;
 use std::str::FromStr;
+use std::thread::sleep;
+use std::time::Duration;
 use test_log::test;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -157,7 +159,7 @@ impl Default for TestValue {
 }
 
 #[test]
-fn startup_test() {
+fn basic_test() {
     let test = create_test_enviroment();
 
     test.run(|ops| async move {
@@ -183,6 +185,76 @@ fn startup_test() {
 
         shell.exp_string("Starting changefeed against node:").unwrap();
 
+        for _ in 0..10 {
+            let test_value = TestValue::default();
+            sqlx::query("INSERT INTO test_table (key, value) VALUES ($1, $2)")
+                .bind(&test_value.key)
+                .bind(&test_value.value)
+                .execute(&sql_pool)
+                .await
+                .unwrap();
+        }
+
+        let receive_message_response = sdk
+            .receive_message()
+            .queue_url(queue_url)
+            .max_number_of_messages(10)
+            .wait_time_seconds(15)
+            .send()
+            .await
+            .unwrap();
+
+        let mut messages = receive_message_response.messages.unwrap();
+
+        assert_eq!(messages.len(), 1);
+        let content = messages.pop().unwrap().body.unwrap();
+        let parsed_content: serde_json::Value = serde_json::from_str(content.as_str()).unwrap();
+        let content_set = parsed_content.as_array().unwrap();
+
+        debug!("Parsed content: {:?}", parsed_content);
+        assert_eq!(content_set.len(), 10);
+
+        sqlx::query("SELECT * from defaultdb.public.cursor_store WHERE key = $1")
+            .bind("test")
+            .fetch_one(&sql_pool)
+            .await
+            .unwrap();
+    })
+}
+
+#[test]
+fn publish_missed_messages() {
+    let test = create_test_enviroment();
+
+    test.run(|ops| async move {
+        let (db_url, sql_pool) = get_sqlx_pool(&ops).await;
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_table (key STRING NOT NULL PRIMARY KEY, value STRING NOT NULL);")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        sqlx::query("SET cluster setting kv.rangefeed.enabled=true;")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
+        let queue_url = create_test_queue(&sdk).await;
+
+        info!("Queue URL: {}", queue_url);
+
+
+        // Start the streamer
+        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+
+        shell.exp_string("Starting changefeed against node:").unwrap();
+        shell.exp_string("UPSERT INTO cursor_store").unwrap();
+
+        // Kill the streamer after an insert has been made to the cursor table
+        shell.send_control('c').unwrap();
+        shell.exp_eof().unwrap();
 
         for _ in 0..10 {
             let test_value = TestValue::default();
@@ -192,6 +264,97 @@ fn startup_test() {
                 .execute(&sql_pool)
                 .await
                 .unwrap();
+        }
+
+        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+
+        shell.exp_string("Starting changefeed against node:").unwrap();
+
+        let receive_message_response = sdk
+            .receive_message()
+            .queue_url(queue_url)
+            .max_number_of_messages(10)
+            .wait_time_seconds(15)
+            .send()
+            .await
+            .unwrap();
+
+        let mut messages = receive_message_response.messages.unwrap();
+
+        assert_eq!(messages.len(), 1);
+        let content = messages.pop().unwrap().body.unwrap();
+        let parsed_content: serde_json::Value = serde_json::from_str(content.as_str()).unwrap();
+        let content_set = parsed_content.as_array().unwrap();
+
+        debug!("Parsed content: {:?}", parsed_content);
+        assert_eq!(content_set.len(), 10);
+    })
+}
+
+#[test]
+fn recover_from_bad_cursor() {
+    let test = create_test_enviroment();
+
+    test.run(|ops| async move {
+        let (db_url, sql_pool) = get_sqlx_pool(&ops).await;
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_table (key STRING NOT NULL PRIMARY KEY, value STRING NOT NULL);")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        sqlx::query("SET cluster setting kv.rangefeed.enabled=true;")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        sqlx::query("alter range default configure zone using gc.ttlseconds = 1;")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(1));
+
+        let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
+        let queue_url = create_test_queue(&sdk).await;
+
+        info!("Queue URL: {}", queue_url);
+
+
+        // Start the streamer
+        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+
+        shell.exp_string("Starting changefeed against node:").unwrap();
+        shell.exp_string("UPSERT INTO cursor_store").unwrap();
+
+        // Kill the streamer after an insert has been made to the cursor table
+        shell.send_control('c').unwrap();
+        shell.exp_eof().unwrap();
+
+        for _ in 0..10 {
+            let test_value = TestValue::default();
+            sqlx::query("INSERT INTO test_table (key, value) VALUES ($1, $2)")
+                .bind(&test_value.key)
+                .bind(&test_value.value)
+                .execute(&sql_pool)
+                .await
+                .unwrap();
+        }
+
+        sqlx::query("update defaultdb.public.cursor_store set cursor = 1 where key = 'test';")
+            .execute(&sql_pool)
+            .await
+            .unwrap();
+
+        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+
+        shell.exp_string("Starting changefeed against node:").unwrap();
+
+        while let Ok(line) = shell.read_line() {
+            info!("Line: {}", line);
         }
 
         let receive_message_response = sdk
