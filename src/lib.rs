@@ -10,7 +10,6 @@ use log::{info, warn};
 use sqlx::error::DatabaseError;
 use sqlx::{postgres::PgPool, prelude::*, PgConnection, Pool, Postgres};
 use tracing::{debug, error};
-use tracing_subscriber::fmt::format;
 
 use cursors::CrdbCursorStore;
 use error::Error;
@@ -83,7 +82,7 @@ fn build_changefeed_query(
     if let Some(cursor) = cursor {
         query = format!("{}, cursor = '{}'", query, cursor);
     } else {
-        query = format!("{}, initial_scan", query);
+        query = format!("{}, no_initial_scan", query);
     }
 
     format!("{};", query)

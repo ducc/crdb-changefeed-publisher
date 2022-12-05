@@ -1,5 +1,6 @@
 use crate::metrics::{TOTAL_BYTES_PROCESSED, TOTAL_MESSAGES_PROCESSED};
 use crate::{ChangePayload, Error, MessageQueue};
+use tracing::debug;
 
 impl QueueBuffer {
     pub fn new(queue: MessageQueue, max_size: usize) -> QueueBuffer {
@@ -11,6 +12,7 @@ impl QueueBuffer {
     }
 
     pub async fn push(&mut self, payload: ChangePayload) -> Result<(), Error> {
+        debug!("pushing payload to buffer {:?}", payload);
         self.buffer.push(payload);
 
         if self.buffer.len() >= self.max_size {

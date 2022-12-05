@@ -63,7 +63,7 @@ pub struct JsonCursor {
     pub resolved: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct ChangePayload {
     pub table: String,
     pub key: Box<RawValue>,

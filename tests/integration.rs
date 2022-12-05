@@ -9,7 +9,7 @@ use http::Uri;
 use portpicker::pick_unused_port;
 use rexpect::session::spawn_command;
 use sqlx::{PgPool, Pool, Postgres};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
@@ -102,10 +102,10 @@ async fn get_sqs_sdk(ops: &DockerOperations) -> (String, aws_sdk_sqs::Client) {
     (sqs_url, aws_sdk_sqs::Client::new(&config))
 }
 
-async fn create_test_queue(sdk: &aws_sdk_sqs::Client) -> String {
+async fn create_test_queue(sdk: &aws_sdk_sqs::Client, queue_name: &str) -> String {
     let create_queue_response = sdk
         .create_queue()
-        .queue_name("test-queue")
+        .queue_name(queue_name)
         .send()
         .await
         .unwrap();
@@ -176,12 +176,14 @@ fn basic_test() {
             .unwrap();
 
         let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
-        let queue_url = create_test_queue(&sdk).await;
+        let queue_url = create_test_queue(&sdk, "basic_test").await;
 
         info!("Queue URL: {}", queue_url);
 
-        let cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
-        let mut shell = spawn_command(cmd, Some(10000)).unwrap();
+        let mut cmd = streamer_cmd(&db_url, &queue_url, "test", "test_table", sqs_url.as_str());
+        cmd.stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        let mut shell = spawn_command(cmd, None).unwrap();
 
         shell.exp_string("Starting changefeed against node:").unwrap();
 
@@ -195,11 +197,12 @@ fn basic_test() {
                 .unwrap();
         }
 
+        sleep(Duration::from_secs(20));
         let receive_message_response = sdk
             .receive_message()
             .queue_url(queue_url)
             .max_number_of_messages(10)
-            .wait_time_seconds(15)
+            .wait_time_seconds(20)
             .send()
             .await
             .unwrap();
@@ -240,7 +243,7 @@ fn publish_missed_messages() {
             .unwrap();
 
         let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
-        let queue_url = create_test_queue(&sdk).await;
+        let queue_url = create_test_queue(&sdk, "publish_missed_messages").await;
 
         info!("Queue URL: {}", queue_url);
 
@@ -314,10 +317,10 @@ fn recover_from_bad_cursor() {
             .await
             .unwrap();
 
-        sleep(Duration::from_secs(1));
+        sleep(Duration::from_secs(5));
 
         let (sqs_url, sdk) = get_sqs_sdk(&ops).await;
-        let queue_url = create_test_queue(&sdk).await;
+        let queue_url = create_test_queue(&sdk, "recover_from_bad_cursor").await;
 
         info!("Queue URL: {}", queue_url);
 
@@ -343,7 +346,7 @@ fn recover_from_bad_cursor() {
                 .unwrap();
         }
 
-        sqlx::query("update defaultdb.public.cursor_store set cursor = 1 where key = 'test';")
+        sqlx::query("update defaultdb.public.cursor_store set cursor = '-5s' where key = 'test';")
             .execute(&sql_pool)
             .await
             .unwrap();
@@ -352,10 +355,6 @@ fn recover_from_bad_cursor() {
         let mut shell = spawn_command(cmd, Some(10000)).unwrap();
 
         shell.exp_string("Starting changefeed against node:").unwrap();
-
-        while let Ok(line) = shell.read_line() {
-            info!("Line: {}", line);
-        }
 
         let receive_message_response = sdk
             .receive_message()
